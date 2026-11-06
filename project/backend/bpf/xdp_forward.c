@@ -22,6 +22,14 @@
 #define BPF_FIB_LOOKUP_DIRECT (1U << 0)
 #endif
 
+/*
+ * bpf_xdp_load_bytes (helper ID 189, Linux ≥ 5.18).
+ * Some CI/distro headers expose it as an unresolved extern/kfunc; cilium/ebpf
+ * then fails with: unsatisfied program reference "bpf_xdp_load_bytes".
+ * Always emit a classic BPF helper call instead.
+ */
+static long (*const xfp_xdp_load_bytes)(struct xdp_md *xdp_md, __u32 offset, void *buf, __u32 len) = (void *)189;
+
 #define MAX_RULES 256
 #define MAX_CT    65536
 
@@ -154,7 +162,7 @@ static __always_inline void recompute_ipv4_l4(struct xdp_md *ctx, struct iphdr *
 
 	__u32 l4_off = sizeof(struct ethhdr) + sizeof(struct iphdr);
 	/* Exact length — oversized fixed loads fail on short SYN/ACK and leave a stale csum. */
-	if (bpf_xdp_load_bytes(ctx, l4_off, buf, l4_len) < 0)
+	if (xfp_xdp_load_bytes(ctx, l4_off, buf, l4_len) < 0)
 		return;
 
 	if (proto == IPPROTO_TCP && l4_len >= 18) {

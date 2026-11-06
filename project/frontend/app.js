@@ -106,7 +106,7 @@ function fmtBytes(n) {
 
 async function renderDash(el) {
   const [st, fwds] = await Promise.all([api("/status"), api("/forwards")]);
-  document.getElementById("nav-ver").textContent = "v" + (st.panel_version || "0.2.1");
+  document.getElementById("nav-ver").textContent = "v" + (st.panel_version || "0.2.2");
   const list = Array.isArray(fwds) ? fwds : [];
   const enabled = list.filter((r) => r.enabled).length;
   el.innerHTML = `
