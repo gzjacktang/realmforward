@@ -1,6 +1,6 @@
 CLANG ?= clang
 LLC ?= llc
-ARCH := $(shell uname -m | sed 's/x86_64/x86/' | sed 's/aarch64/arm64/')
+ARCH ?= $(shell uname -m | sed 's/x86_64/x86/' | sed 's/aarch64/arm64/')
 MULTIARCH := $(shell dpkg-architecture -qDEB_HOST_MULTIARCH 2>/dev/null || echo x86_64-linux-gnu)
 BPF_CFLAGS ?= -O2 -g -target bpf -D__TARGET_ARCH_$(ARCH) \
 	-I/usr/include/$(MULTIARCH) -I/usr/include -Wall

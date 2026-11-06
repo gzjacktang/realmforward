@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/wuling/xdp-forward-panel/internal/version"
 )
 
 type Config struct {
@@ -37,20 +39,20 @@ func Default(dataDir string) *Config {
 		BasePath:    "/",
 		DataDir:     dataDir,
 		Iface:       "",
-		PublicHost:  "fxhk.jllexs.top",
+		PublicHost:  "",
 		TLSMode:     "selfsigned",
 		ACMEEmail:   "",
 		SNATPortMin: 40000,
 		SNATPortMax: 49999,
 		TLSCertFile: filepath.Join(dataDir, "tls", "cert.pem"),
 		TLSKeyFile:  filepath.Join(dataDir, "tls", "key.pem"),
-		UpdateURL:   "",
+		UpdateURL:   "https://github.com/gzjacktang/xdpforward/releases/latest",
 		AutoUpdate:  true,
 		TGAdminIDs:  nil,
 		TGEnabled:   false,
 		XDPMode:     "auto",
-		PanelVersion: "0.1.0",
-		BPFVersion:   "0.1.0",
+		PanelVersion: version.Version,
+		BPFVersion:   version.BPFVersion,
 	}
 }
 
@@ -87,8 +89,8 @@ func LoadOrCreate(path string, dataDir string) (*Manager, error) {
 	if m.cfg.ListenPort == 0 {
 		m.cfg.ListenPort = 2888
 	}
-	m.cfg.PanelVersion = "0.1.0"
-	m.cfg.BPFVersion = "0.1.0"
+	m.cfg.PanelVersion = version.Version
+	m.cfg.BPFVersion = version.BPFVersion
 	return m, nil
 }
 

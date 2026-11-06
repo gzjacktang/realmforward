@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # xdp — VPS 控制台：安装 / 卸载 / 更新 / 账号 / 证书 / 服务
+# 安装与更新均从 GitHub Releases 拉取预编译包（无需 Go / clang）
 set -euo pipefail
 
 DATA="${XFP_DATA:-/var/lib/xdp-forward-panel}"
 LIBDIR="${XFP_LIBDIR:-/usr/lib/xdp-forward-panel}"
 SHARE="${XFP_SHARE:-/usr/share/xdp-forward-panel}"
 SERVICE=xdp-forward-panel.service
-REPO_URL="${XFP_REPO:-https://github.com/gzjacktang/xdpforward.git}"
-REPO_DIR="${XFP_REPO_DIR:-/opt/xdp-forward-panel}"
-INSTALL_SRC="${XFP_INSTALL_SRC:-}"
+GITHUB_REPO="${XFP_GITHUB_REPO:-gzjacktang/xdpforward}"
+RELEASE_CACHE="${XFP_RELEASE_CACHE:-/opt/xdp-forward-panel/release}"
 
 red()  { printf '\033[31m%s\033[0m\n' "$*"; }
 grn()  { printf '\033[32m%s\033[0m\n' "$*"; }
@@ -37,22 +37,55 @@ except Exception:
 PY
 }
 
-resolve_install_root() {
-  if [[ -n "$INSTALL_SRC" && -f "$INSTALL_SRC/utils/install.sh" ]]; then
-    echo "$INSTALL_SRC"
-    return
+arch_tag() {
+  case "$(uname -m)" in
+    x86_64|amd64) echo linux-amd64 ;;
+    aarch64|arm64) echo linux-arm64 ;;
+    *)
+      red "暂不支持的架构: $(uname -m)"
+      exit 1
+      ;;
+  esac
+}
+
+# 设置全局 _XFP_TMP / _XFP_ROOT：下载并解压 Release 包
+fetch_release_pkg() {
+  local want_tag="${1:-}"
+  local api json tag asset_url arch
+  arch="$(arch_tag)"
+  _XFP_TMP="$(mktemp -d)"
+  apt-get install -y ca-certificates curl jq tar gzip >/dev/null 2>&1 || true
+
+  if [[ -n "$want_tag" ]]; then
+    [[ "$want_tag" == v* ]] || want_tag="v${want_tag}"
+    api="https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${want_tag}"
+  else
+    api="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
   fi
-  if [[ -f "$REPO_DIR/utils/install.sh" ]]; then
-    echo "$REPO_DIR"
-    return
+
+  json="$(curl -fsSL "$api")"
+  tag="$(printf '%s' "$json" | jq -r '.tag_name')"
+  asset_url="$(printf '%s' "$json" | jq -r --arg a "xdpforward-${tag}-${arch}.tar.gz" \
+    '.assets[] | select(.name==$a) | .browser_download_url')"
+  if [[ -z "$asset_url" || "$asset_url" == "null" ]]; then
+    asset_url="$(printf '%s' "$json" | jq -r --arg a "xdpforward-v${tag#v}-${arch}.tar.gz" \
+      '.assets[] | select(.name==$a) | .browser_download_url')"
   fi
-  local self
-  self="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd || true)"
-  if [[ -n "$self" && -f "$self/utils/install.sh" ]]; then
-    echo "$self"
-    return
+  if [[ -z "$asset_url" || "$asset_url" == "null" ]]; then
+    red "未找到安装包: xdpforward-${tag}-${arch}.tar.gz"
+    printf '%s' "$json" | jq -r '.assets[].name' >&2 || true
+    rm -rf "$_XFP_TMP"
+    exit 1
   fi
-  echo ""
+
+  bold "下载 ${asset_url} …"
+  curl -fL --progress-bar "$asset_url" -o "$_XFP_TMP/pkg.tgz"
+  mkdir -p "$_XFP_TMP/pkg"
+  tar -xzf "$_XFP_TMP/pkg.tgz" -C "$_XFP_TMP/pkg"
+  local bin
+  bin="$(find "$_XFP_TMP/pkg" -maxdepth 3 -type f -path '*/bin/xdp-panel' | head -1)"
+  _XFP_ROOT="$(cd "$(dirname "$bin")/.." && pwd)"
+  [[ -x "$_XFP_ROOT/bin/xdp-panel" ]] || { red "解压失败"; rm -rf "$_XFP_TMP"; exit 1; }
 }
 
 cmd_status() {
@@ -63,11 +96,13 @@ cmd_status() {
     ylw "服务未安装"
   fi
   echo
-  local host port base
+  local host port base ver
   host="$(cfg_get public_host "<IP>")"
   port="$(cfg_get listen_port 2888)"
   base="$(cfg_get base_path /)"
   [[ "$base" == "/" ]] && base=""
+  ver="$(tr -d '[:space:]' </opt/xdp-forward-panel/VERSION 2>/dev/null || echo "?")"
+  echo "版本: v${ver}"
   echo "面板: https://${host}:${port}${base}/"
   echo "证书: $(cfg_get tls_mode selfsigned) · SNAT: $(cfg_get snat_port_min 40000)-$(cfg_get snat_port_max 49999)"
   if [[ -x /usr/local/bin/xdp-panel ]]; then
@@ -87,40 +122,28 @@ cmd_restart() { need_root; systemctl restart "$SERVICE"; grn "已重启"; sleep 
 
 cmd_install() {
   need_root
-  local root
-  root="$(resolve_install_root)"
-  if [[ -z "$root" ]]; then
-    bold "未找到本地源码，从 GitHub 拉取…"
-    apt-get update -y >/dev/null 2>&1 || true
-    apt-get install -y git ca-certificates curl >/dev/null 2>&1 || true
-    rm -rf "$REPO_DIR"
-    git clone --depth 1 "$REPO_URL" "$REPO_DIR"
-    root="$REPO_DIR"
+  if [[ -n "${XFP_INSTALL_SRC:-}" && -f "${XFP_INSTALL_SRC}/utils/install-release.sh" ]]; then
+    bash "${XFP_INSTALL_SRC}/utils/install-release.sh"
+    return
   fi
-  bash "$root/utils/install.sh"
-  # ensure CLI name is xdp
-  install -m 0755 "$root/utils/xdp" /usr/local/bin/xdp
-  grn "CLI 已安装: xdp"
-  echo "日常管理请运行: xdp"
+  bold "从 GitHub Releases 安装…"
+  fetch_release_pkg
+  XFP_NONINTERACTIVE="${XFP_NONINTERACTIVE:-0}" bash "$_XFP_ROOT/utils/install-release.sh"
+  rm -rf "$_XFP_TMP"
+  grn "CLI: xdp"
 }
 
 cmd_update() {
   need_root
-  bold "更新 XDP Forward Panel…"
-  apt-get install -y git ca-certificates curl >/dev/null 2>&1 || true
-  if [[ -d "$REPO_DIR/.git" ]]; then
-    git -C "$REPO_DIR" fetch --depth 1 origin main 2>/dev/null || git -C "$REPO_DIR" fetch --depth 1 origin master
-    git -C "$REPO_DIR" reset --hard origin/main 2>/dev/null || git -C "$REPO_DIR" reset --hard origin/master
-  else
-    rm -rf "$REPO_DIR"
-    git clone --depth 1 "$REPO_URL" "$REPO_DIR"
-  fi
-  # keep config/data; reinstall binaries + web + bpf
-  XFP_NONINTERACTIVE=1 XFP_TLS_MODE="$(cfg_get tls_mode selfsigned)" \
-    XFP_DOMAIN="$(cfg_get public_host)" XFP_EMAIL="$(cfg_get acme_email)" \
+  bold "从 GitHub Releases 更新…"
+  fetch_release_pkg "${1:-}"
+  XFP_NONINTERACTIVE=1 \
+    XFP_TLS_MODE="$(cfg_get tls_mode selfsigned)" \
+    XFP_DOMAIN="$(cfg_get public_host)" \
+    XFP_EMAIL="$(cfg_get acme_email)" \
     XFP_IFACE="$(cfg_get iface)" \
-    bash "$REPO_DIR/utils/install.sh"
-  install -m 0755 "$REPO_DIR/utils/xdp" /usr/local/bin/xdp
+    bash "$_XFP_ROOT/utils/install-release.sh"
+  rm -rf "$_XFP_TMP"
   grn "更新完成"
   cmd_status
 }
@@ -149,9 +172,9 @@ cmd_uninstall() {
   else
     echo "已保留 $DATA"
   fi
-  read -r -p "是否删除源码目录 $REPO_DIR ？(yes/N): " wipe2
+  read -r -p "是否删除缓存目录 /opt/xdp-forward-panel ？(yes/N): " wipe2
   if [[ "$wipe2" == "yes" ]]; then
-    rm -rf "$REPO_DIR"
+    rm -rf /opt/xdp-forward-panel
   fi
   grn "卸载完成"
 }
@@ -194,10 +217,12 @@ PY
 cmd_cert() {
   need_root
   if [[ ! -x /usr/local/sbin/xdp-panel-issue-cert ]]; then
-    local root
-    root="$(resolve_install_root)"
-    [[ -n "$root" ]] || { red "找不到 issue-cert 脚本，请先 xdp install"; exit 1; }
-    install -m 0755 "$root/utils/issue-cert.sh" /usr/local/sbin/xdp-panel-issue-cert
+    if [[ -f "$RELEASE_CACHE/utils/issue-cert.sh" ]]; then
+      install -m 0755 "$RELEASE_CACHE/utils/issue-cert.sh" /usr/local/sbin/xdp-panel-issue-cert
+    else
+      red "找不到 issue-cert 脚本，请先 xdp install / xdp update"
+      exit 1
+    fi
   fi
   if [[ "${1:-}" == "prompt" || -z "${1:-}" ]]; then
     /usr/local/sbin/xdp-panel-issue-cert prompt
@@ -247,14 +272,14 @@ xdp — XDP Forward Panel 管理工具
   xdp                 打开交互控制菜单
   xdp status          查看状态
   xdp start|stop|restart
-  xdp install         安装/重装
-  xdp update          从 GitHub 更新
+  xdp install         从 GitHub Releases 安装
+  xdp update [vX.Y.Z] 拉取最新（或指定 tag）预编译包并更新
   xdp uninstall       卸载
   xdp passwd          更改用户名/密码
-  xdp cert [prompt|selfsigned|letsencrypt ...]
+  xdp cert [prompt|selfsigned|letsencrypt|zerossl ...]
   xdp help
 
-一键安装（新机器）:
+一键安装（新机器，无需 Go/clang）:
   bash <(curl -fsSL https://raw.githubusercontent.com/gzjacktang/xdpforward/main/utils/install-remote.sh)
 EOF
 }

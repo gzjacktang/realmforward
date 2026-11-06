@@ -106,7 +106,7 @@ function fmtBytes(n) {
 
 async function renderDash(el) {
   const [st, fwds] = await Promise.all([api("/status"), api("/forwards")]);
-  document.getElementById("nav-ver").textContent = "v" + (st.panel_version || "0.1.0");
+  document.getElementById("nav-ver").textContent = "v" + (st.panel_version || "0.2.0");
   const list = Array.isArray(fwds) ? fwds : [];
   const enabled = list.filter((r) => r.enabled).length;
   el.innerHTML = `
@@ -414,7 +414,7 @@ async function renderSettings(el) {
         <div class="ver-row"><div><div class="name">转发内核 BPF</div><div class="ver">v${s.bpf_version} · ${s.xdp?.loaded ? s.xdp.mode : "未加载"}</div></div>
         <div class="field"><label>自动更新</label>
           <button type="button" class="toggle ${s.auto_update ? "on" : ""}" id="au"></button></div>
-        <div class="field"><label>更新仓库</label><input id="upd" class="mono" value="${s.update_url || "https://github.com/gzjacktang/xdpforward.git"}" /></div>
+        <div class="field"><label>更新地址</label><input id="upd" class="mono" value="${s.update_url || "https://github.com/gzjacktang/xdpforward/releases/latest"}" /></div>
         <div style="display:flex;flex-wrap:wrap;gap:8px">
           <button class="btn btn-primary" id="do-update">立即更新</button>
           <button class="btn btn-warn" id="restart">重启面板</button>

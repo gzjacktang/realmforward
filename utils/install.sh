@@ -82,7 +82,7 @@ if [[ ! -f "$DATA/config.json" ]]; then
   "snat_port_max": 49999,
   "tls_cert_file": "$DATA/tls/cert.pem",
   "tls_key_file": "$DATA/tls/key.pem",
-  "update_url": "https://github.com/gzjacktang/xdpforward.git",
+  "update_url": "https://github.com/gzjacktang/xdpforward/releases/latest",
   "auto_update": true,
   "tg_token": "",
   "tg_admin_ids": null,
