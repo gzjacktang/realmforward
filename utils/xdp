@@ -1,0 +1,281 @@
+#!/usr/bin/env bash
+# xdp — VPS 控制台：安装 / 卸载 / 更新 / 账号 / 证书 / 服务
+set -euo pipefail
+
+DATA="${XFP_DATA:-/var/lib/xdp-forward-panel}"
+LIBDIR="${XFP_LIBDIR:-/usr/lib/xdp-forward-panel}"
+SHARE="${XFP_SHARE:-/usr/share/xdp-forward-panel}"
+SERVICE=xdp-forward-panel.service
+REPO_URL="${XFP_REPO:-https://github.com/gzjacktang/xdpforward.git}"
+REPO_DIR="${XFP_REPO_DIR:-/opt/xdp-forward-panel}"
+INSTALL_SRC="${XFP_INSTALL_SRC:-}"
+
+red()  { printf '\033[31m%s\033[0m\n' "$*"; }
+grn()  { printf '\033[32m%s\033[0m\n' "$*"; }
+ylw()  { printf '\033[33m%s\033[0m\n' "$*"; }
+bold() { printf '\033[1m%s\033[0m\n' "$*"; }
+
+need_root() {
+  if [[ "$(id -u)" -ne 0 ]]; then
+    red "请使用 root 运行: sudo xdp $*"
+    exit 1
+  fi
+}
+
+cfg_get() {
+  local key="$1" def="${2:-}"
+  [[ -f "$DATA/config.json" ]] || { echo "$def"; return; }
+  python3 - "$key" "$def" <<'PY' 2>/dev/null || echo "$def"
+import json,sys
+k,d=sys.argv[1],sys.argv[2]
+try:
+  c=json.load(open("/var/lib/xdp-forward-panel/config.json"))
+  v=c.get(k)
+  print(v if v not in (None,"") else d)
+except Exception:
+  print(d)
+PY
+}
+
+resolve_install_root() {
+  if [[ -n "$INSTALL_SRC" && -f "$INSTALL_SRC/utils/install.sh" ]]; then
+    echo "$INSTALL_SRC"
+    return
+  fi
+  if [[ -f "$REPO_DIR/utils/install.sh" ]]; then
+    echo "$REPO_DIR"
+    return
+  fi
+  local self
+  self="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd || true)"
+  if [[ -n "$self" && -f "$self/utils/install.sh" ]]; then
+    echo "$self"
+    return
+  fi
+  echo ""
+}
+
+cmd_status() {
+  bold "=== XDP Forward Panel 状态 ==="
+  if systemctl cat "$SERVICE" >/dev/null 2>&1; then
+    systemctl --no-pager --full status "$SERVICE" | head -20 || true
+  else
+    ylw "服务未安装"
+  fi
+  echo
+  local host port base
+  host="$(cfg_get public_host "<IP>")"
+  port="$(cfg_get listen_port 2888)"
+  base="$(cfg_get base_path /)"
+  [[ "$base" == "/" ]] && base=""
+  echo "面板: https://${host}:${port}${base}/"
+  echo "证书: $(cfg_get tls_mode selfsigned) · SNAT: $(cfg_get snat_port_min 40000)-$(cfg_get snat_port_max 49999)"
+  if [[ -x /usr/local/bin/xdp-panel ]]; then
+    echo "二进制: /usr/local/bin/xdp-panel"
+  fi
+  if ip link show 2>/dev/null | grep -q 'prog/xdp'; then
+    grn "XDP: 已挂载"
+    ip link show | grep -A1 'prog/xdp' || true
+  else
+    ylw "XDP: 未检测到挂载（服务未运行或加载失败）"
+  fi
+}
+
+cmd_start()   { need_root; systemctl start "$SERVICE"; grn "已启动"; cmd_status; }
+cmd_stop()    { need_root; systemctl stop "$SERVICE"; ylw "已停止"; }
+cmd_restart() { need_root; systemctl restart "$SERVICE"; grn "已重启"; sleep 1; cmd_status; }
+
+cmd_install() {
+  need_root
+  local root
+  root="$(resolve_install_root)"
+  if [[ -z "$root" ]]; then
+    bold "未找到本地源码，从 GitHub 拉取…"
+    apt-get update -y >/dev/null 2>&1 || true
+    apt-get install -y git ca-certificates curl >/dev/null 2>&1 || true
+    rm -rf "$REPO_DIR"
+    git clone --depth 1 "$REPO_URL" "$REPO_DIR"
+    root="$REPO_DIR"
+  fi
+  bash "$root/utils/install.sh"
+  # ensure CLI name is xdp
+  install -m 0755 "$root/utils/xdp" /usr/local/bin/xdp
+  grn "CLI 已安装: xdp"
+  echo "日常管理请运行: xdp"
+}
+
+cmd_update() {
+  need_root
+  bold "更新 XDP Forward Panel…"
+  apt-get install -y git ca-certificates curl >/dev/null 2>&1 || true
+  if [[ -d "$REPO_DIR/.git" ]]; then
+    git -C "$REPO_DIR" fetch --depth 1 origin main 2>/dev/null || git -C "$REPO_DIR" fetch --depth 1 origin master
+    git -C "$REPO_DIR" reset --hard origin/main 2>/dev/null || git -C "$REPO_DIR" reset --hard origin/master
+  else
+    rm -rf "$REPO_DIR"
+    git clone --depth 1 "$REPO_URL" "$REPO_DIR"
+  fi
+  # keep config/data; reinstall binaries + web + bpf
+  XFP_NONINTERACTIVE=1 XFP_TLS_MODE="$(cfg_get tls_mode selfsigned)" \
+    XFP_DOMAIN="$(cfg_get public_host)" XFP_EMAIL="$(cfg_get acme_email)" \
+    XFP_IFACE="$(cfg_get iface)" \
+    bash "$REPO_DIR/utils/install.sh"
+  install -m 0755 "$REPO_DIR/utils/xdp" /usr/local/bin/xdp
+  grn "更新完成"
+  cmd_status
+}
+
+cmd_uninstall() {
+  need_root
+  echo
+  ylw "将卸载面板服务、二进制与前端；默认保留 $DATA（配置/数据库/证书）。"
+  read -r -p "确认卸载？输入 yes 继续: " ans
+  [[ "$ans" == "yes" ]] || { echo "已取消"; return 0; }
+  systemctl stop "$SERVICE" 2>/dev/null || true
+  systemctl disable "$SERVICE" 2>/dev/null || true
+  systemctl stop xdp-panel-update.timer 2>/dev/null || true
+  systemctl disable xdp-panel-update.timer 2>/dev/null || true
+  rm -f /etc/systemd/system/xdp-forward-panel.service
+  rm -f /etc/systemd/system/xdp-panel-update.service
+  rm -f /etc/systemd/system/xdp-panel-update.timer
+  systemctl daemon-reload
+  rm -f /usr/local/bin/xdp-panel /usr/local/bin/xdp
+  rm -f /usr/local/sbin/xdp-panel-issue-cert /usr/local/sbin/xdp-panel-auto-update
+  rm -rf "$LIBDIR" "$SHARE"
+  read -r -p "是否同时删除数据目录 $DATA ？(yes/N): " wipe
+  if [[ "$wipe" == "yes" ]]; then
+    rm -rf "$DATA"
+    ylw "已删除 $DATA"
+  else
+    echo "已保留 $DATA"
+  fi
+  read -r -p "是否删除源码目录 $REPO_DIR ？(yes/N): " wipe2
+  if [[ "$wipe2" == "yes" ]]; then
+    rm -rf "$REPO_DIR"
+  fi
+  grn "卸载完成"
+}
+
+cmd_passwd() {
+  need_root
+  [[ -f "$DATA/panel.db" ]] || { red "未找到数据库 $DATA/panel.db，请先安装"; exit 1; }
+  local user newp
+  user="$(python3 - <<'PY'
+import sqlite3
+c=sqlite3.connect("/var/lib/xdp-forward-panel/panel.db")
+r=c.execute("select username from users where id=1").fetchone()
+print(r[0] if r else "admin")
+PY
+)"
+  echo "当前用户: $user"
+  read -r -p "新用户名（回车保持 $user）: " nu
+  [[ -z "$nu" ]] && nu="$user"
+  read -r -s -p "新密码（至少 8 位）: " newp; echo
+  [[ ${#newp} -ge 8 ]] || { red "密码太短"; exit 1; }
+  python3 - "$nu" "$newp" <<'PY'
+import sys, sqlite3, subprocess
+user, plain = sys.argv[1], sys.argv[2]
+try:
+    import bcrypt
+except ImportError:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "bcrypt"])
+    import bcrypt
+hashed = bcrypt.hashpw(plain.encode(), bcrypt.gensalt()).decode()
+db = sqlite3.connect("/var/lib/xdp-forward-panel/panel.db")
+db.execute("UPDATE users SET username=?, password_hash=?, updated_at=datetime('now') WHERE id=1", (user, hashed))
+db.execute("DELETE FROM sessions")
+db.commit()
+print("OK")
+PY
+  grn "账号已更新: $nu"
+  echo "请使用新密码登录面板。"
+}
+
+cmd_cert() {
+  need_root
+  if [[ ! -x /usr/local/sbin/xdp-panel-issue-cert ]]; then
+    local root
+    root="$(resolve_install_root)"
+    [[ -n "$root" ]] || { red "找不到 issue-cert 脚本，请先 xdp install"; exit 1; }
+    install -m 0755 "$root/utils/issue-cert.sh" /usr/local/sbin/xdp-panel-issue-cert
+  fi
+  if [[ "${1:-}" == "prompt" || -z "${1:-}" ]]; then
+    /usr/local/sbin/xdp-panel-issue-cert prompt
+  else
+    /usr/local/sbin/xdp-panel-issue-cert "$@"
+  fi
+  systemctl restart "$SERVICE" 2>/dev/null || true
+  grn "证书流程结束（已尝试重启服务）"
+}
+
+cmd_menu() {
+  need_root
+  while true; do
+    echo
+    bold "======== XDP 控制面板 ========"
+    echo "  1) 状态"
+    echo "  2) 启动"
+    echo "  3) 停止"
+    echo "  4) 重启"
+    echo "  5) 更新"
+    echo "  6) 更改用户名/密码"
+    echo "  7) 安装/更换证书"
+    echo "  8) 卸载"
+    echo "  0) 退出"
+    echo "=============================="
+    read -r -p "请选择: " c
+    case "$c" in
+      1) cmd_status ;;
+      2) cmd_start ;;
+      3) cmd_stop ;;
+      4) cmd_restart ;;
+      5) cmd_update ;;
+      6) cmd_passwd ;;
+      7) cmd_cert prompt ;;
+      8) cmd_uninstall ;;
+      0|q|Q) exit 0 ;;
+      *) ylw "无效选项" ;;
+    esac
+  done
+}
+
+usage() {
+  cat <<EOF
+xdp — XDP Forward Panel 管理工具
+
+用法:
+  xdp                 打开交互控制菜单
+  xdp status          查看状态
+  xdp start|stop|restart
+  xdp install         安装/重装
+  xdp update          从 GitHub 更新
+  xdp uninstall       卸载
+  xdp passwd          更改用户名/密码
+  xdp cert [prompt|selfsigned|letsencrypt ...]
+  xdp help
+
+一键安装（新机器）:
+  bash <(curl -fsSL https://raw.githubusercontent.com/gzjacktang/xdpforward/main/utils/install-remote.sh)
+EOF
+}
+
+main() {
+  local cmd="${1:-menu}"
+  shift || true
+  case "$cmd" in
+    menu|"")   cmd_menu ;;
+    status)    cmd_status ;;
+    start)     cmd_start ;;
+    stop)      cmd_stop ;;
+    restart)   cmd_restart ;;
+    install)   cmd_install "$@" ;;
+    update)    cmd_update "$@" ;;
+    uninstall) cmd_uninstall "$@" ;;
+    passwd|account|password) cmd_passwd "$@" ;;
+    cert|tls)  cmd_cert "$@" ;;
+    help|-h|--help) usage ;;
+    *) red "未知命令: $cmd"; usage; exit 1 ;;
+  esac
+}
+
+main "$@"

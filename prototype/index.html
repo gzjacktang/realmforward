@@ -1,0 +1,961 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>XDP Forward Panel — 原型</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #e7eef8;
+      --bg-deep: #d3e0f2;
+      --surface: #f5f8fc;
+      --surface-2: #ffffff;
+      --ink: #0b1a2e;
+      --ink-soft: #34506e;
+      --muted: #6b849e;
+      --line: #c5d5e8;
+      --accent: #1a6fd4;
+      --accent-2: #0f56ad;
+      --accent-soft: rgba(26, 111, 212, 0.12);
+      --warn: #b45309;
+      --warn-soft: rgba(180, 83, 9, 0.12);
+      --danger: #b42318;
+      --danger-soft: rgba(180, 35, 24, 0.1);
+      --ok: #067647;
+      --ok-soft: rgba(6, 118, 71, 0.12);
+      --info: #175cd3;
+      --shadow: 0 1px 2px rgba(11, 26, 46, 0.06), 0 8px 24px rgba(11, 26, 46, 0.06);
+      --radius: 10px;
+      --font: "DM Sans", system-ui, sans-serif;
+      --mono: "IBM Plex Mono", ui-monospace, monospace;
+      --nav-w: 232px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { min-height: 100%; }
+    body {
+      font-family: var(--font);
+      color: var(--ink);
+      background:
+        radial-gradient(1200px 600px at 8% -10%, rgba(26, 111, 212, 0.18), transparent 55%),
+        radial-gradient(900px 500px at 100% 0%, rgba(56, 139, 253, 0.1), transparent 50%),
+        linear-gradient(180deg, var(--bg) 0%, var(--bg-deep) 100%);
+      background-attachment: fixed;
+    }
+    button, input, select { font: inherit; }
+    a { color: inherit; text-decoration: none; }
+    .mono { font-family: var(--mono); font-size: 0.86em; letter-spacing: -0.02em; }
+
+    /* ——— Login ——— */
+    .view { display: none; min-height: 100vh; }
+    .view.active { display: block; }
+    #view-login.active {
+      display: grid;
+      place-items: center;
+      padding: 32px 16px;
+    }
+    .login-card {
+      width: min(420px, 100%);
+      background: var(--surface-2);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      box-shadow: var(--shadow);
+      padding: 36px 32px 28px;
+      position: relative;
+      overflow: hidden;
+    }
+    .login-card::before {
+      content: "";
+      position: absolute;
+      inset: 0 0 auto 0;
+      height: 4px;
+      background: linear-gradient(90deg, #1a6fd4, #38bdf8);
+    }
+    .brand-mark {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 28px;
+    }
+    .brand-mark .logo {
+      width: 40px; height: 40px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, #1a6fd4, #0ea5e9);
+      display: grid; place-items: center;
+      color: #fff;
+      font-family: var(--mono);
+      font-weight: 600;
+      font-size: 13px;
+    }
+    .brand-mark h1 {
+      font-size: 1.15rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+    .brand-mark p { color: var(--muted); font-size: 0.85rem; margin-top: 2px; }
+    .field { margin-bottom: 16px; }
+    .field label {
+      display: block;
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--ink-soft);
+      margin-bottom: 6px;
+    }
+    .field input, .field select, .field textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      background: var(--surface);
+      border-radius: 8px;
+      padding: 10px 12px;
+      color: var(--ink);
+      outline: none;
+      transition: border-color .15s, box-shadow .15s;
+    }
+    .field input:focus, .field select:focus, .field textarea:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-soft);
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      padding: 10px 16px;
+      font-weight: 600;
+      font-size: 0.9rem;
+      cursor: pointer;
+      transition: background .15s, border-color .15s, transform .1s;
+    }
+    .btn:active { transform: translateY(1px); }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-primary:hover { background: var(--accent-2); }
+    .btn-ghost {
+      background: transparent;
+      border-color: var(--line);
+      color: var(--ink-soft);
+    }
+    .btn-ghost:hover { background: var(--surface); }
+    .btn-danger { background: var(--danger); color: #fff; }
+    .btn-warn { background: var(--warn); color: #fff; }
+    .btn-sm { padding: 6px 10px; font-size: 0.8rem; }
+    .btn-block { width: 100%; }
+    .login-hint {
+      margin-top: 16px;
+      font-size: 0.78rem;
+      color: var(--muted);
+      text-align: center;
+    }
+
+    /* ——— App shell ——— */
+    #view-app.active { display: grid; grid-template-columns: var(--nav-w) 1fr; min-height: 100vh; }
+    .nav {
+      background: #0b1f3a;
+      color: #d7e4ec;
+      padding: 20px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      position: sticky;
+      top: 0;
+      height: 100vh;
+    }
+    .nav .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 6px 10px 18px;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+      margin-bottom: 12px;
+    }
+    .nav .brand .logo {
+      width: 32px; height: 32px; border-radius: 8px;
+      background: linear-gradient(135deg, #3b82f6, #38bdf8);
+      display: grid; place-items: center;
+      color: #0b1f3a; font-family: var(--mono); font-weight: 700; font-size: 11px;
+    }
+    .nav .brand strong { display: block; font-size: 0.92rem; color: #fff; }
+    .nav .brand span { font-size: 0.72rem; color: #7f96a6; }
+    .nav-item {
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px 12px;
+      border-radius: 8px;
+      color: #a8bbc8;
+      font-size: 0.9rem;
+      font-weight: 500;
+      cursor: pointer;
+      border: none;
+      background: transparent;
+      width: 100%;
+      text-align: left;
+    }
+    .nav-item:hover { background: rgba(255,255,255,0.05); color: #fff; }
+    .nav-item.active { background: rgba(59, 130, 246, 0.22); color: #93c5fd; }
+    .nav-item .ico { width: 18px; opacity: 0.85; text-align: center; font-size: 0.85rem; }
+    .nav-foot {
+      margin-top: auto;
+      padding: 12px 10px;
+      border-top: 1px solid rgba(255,255,255,0.08);
+      font-size: 0.75rem;
+      color: #7f96a6;
+    }
+    .nav-foot .host { color: #c5d4df; font-family: var(--mono); font-size: 0.72rem; margin-top: 4px; }
+
+    .main { padding: 28px 32px 48px; min-width: 0; }
+    .page { display: none; animation: fade .2s ease; }
+    .page.active { display: block; }
+    @keyframes fade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+    .page-head {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 22px;
+    }
+    .page-head h2 {
+      font-size: 1.45rem;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+    }
+    .page-head .sub { color: var(--muted); font-size: 0.9rem; margin-top: 4px; }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+    .banner {
+      display: flex; gap: 12px; align-items: flex-start;
+      padding: 12px 14px;
+      border-radius: var(--radius);
+      border: 1px solid;
+      margin-bottom: 18px;
+      font-size: 0.88rem;
+      line-height: 1.45;
+    }
+    .banner.warn {
+      background: var(--warn-soft);
+      border-color: rgba(180, 83, 9, 0.35);
+      color: #7a3b04;
+    }
+    .banner.info {
+      background: rgba(23, 92, 211, 0.08);
+      border-color: rgba(23, 92, 211, 0.25);
+      color: #1849a9;
+    }
+
+    .grid { display: grid; gap: 14px; }
+    .grid-4 { grid-template-columns: repeat(4, 1fr); }
+    .grid-2 { grid-template-columns: repeat(2, 1fr); }
+    @media (max-width: 1100px) {
+      .grid-4 { grid-template-columns: repeat(2, 1fr); }
+      #view-app.active { grid-template-columns: 1fr; }
+      .nav { position: relative; height: auto; flex-direction: row; flex-wrap: wrap; }
+      .nav-foot { display: none; }
+    }
+    @media (max-width: 640px) {
+      .grid-4, .grid-2 { grid-template-columns: 1fr; }
+      .main { padding: 20px 16px 40px; }
+    }
+
+    .stat {
+      background: var(--surface-2);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 16px 18px;
+      box-shadow: var(--shadow);
+    }
+    .stat .label { font-size: 0.78rem; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+    .stat .value { font-size: 1.55rem; font-weight: 700; letter-spacing: -0.03em; margin-top: 6px; }
+    .stat .meta { font-size: 0.8rem; color: var(--ink-soft); margin-top: 6px; }
+
+    .panel {
+      background: var(--surface-2);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .panel-h {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+      background: var(--surface);
+    }
+    .panel-h h3 { font-size: 0.95rem; font-weight: 650; }
+    .panel-b { padding: 0; }
+
+    table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+    th, td { padding: 11px 14px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: middle; }
+    th { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); font-weight: 650; background: var(--surface); }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: rgba(26, 111, 212, 0.04); }
+
+    .tag {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 0.72rem;
+      font-weight: 650;
+      font-family: var(--mono);
+    }
+    .tag-ok { background: var(--ok-soft); color: var(--ok); }
+    .tag-off { background: #eef2f6; color: var(--muted); }
+    .tag-warn { background: var(--warn-soft); color: var(--warn); }
+    .tag-info { background: rgba(23,92,211,.1); color: var(--info); }
+    .tag-danger { background: var(--danger-soft); color: var(--danger); }
+    .tag-xdp { background: var(--accent-soft); color: var(--accent-2); }
+    .hint { font-size: 0.78rem; color: var(--muted); margin-top: 6px; line-height: 1.4; }
+    .ver-row {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      padding: 12px 0; border-bottom: 1px solid var(--line);
+    }
+    .ver-row:last-child { border-bottom: none; }
+    .ver-row .name { font-weight: 650; }
+    .ver-row .ver { font-family: var(--mono); font-size: 0.82rem; color: var(--ink-soft); }
+
+    .stack-status { display: flex; flex-wrap: wrap; gap: 6px; }
+    .toggle {
+      width: 42px; height: 24px; border-radius: 999px;
+      border: none; background: #c5d4df; position: relative; cursor: pointer;
+      transition: background .2s;
+    }
+    .toggle.on { background: var(--accent); }
+    .toggle::after {
+      content: ""; position: absolute; top: 3px; left: 3px;
+      width: 18px; height: 18px; border-radius: 50%; background: #fff;
+      transition: transform .2s; box-shadow: 0 1px 2px rgba(0,0,0,.15);
+    }
+    .toggle.on::after { transform: translateX(18px); }
+
+    .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    @media (max-width: 640px) { .form-row { grid-template-columns: 1fr; } }
+    .form-box { padding: 16px; }
+
+    /* Modal */
+    .modal-backdrop {
+      position: fixed; inset: 0;
+      background: rgba(15, 28, 36, 0.45);
+      display: none; place-items: center;
+      padding: 16px; z-index: 50;
+      backdrop-filter: blur(2px);
+    }
+    .modal-backdrop.show { display: grid; }
+    .modal {
+      width: min(440px, 100%);
+      background: var(--surface-2);
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      box-shadow: 0 20px 50px rgba(15,28,36,.2);
+      padding: 22px;
+    }
+    .modal h3 { font-size: 1.05rem; margin-bottom: 8px; }
+    .modal p { color: var(--ink-soft); font-size: 0.9rem; line-height: 1.5; margin-bottom: 18px; }
+    .modal .row { display: flex; justify-content: flex-end; gap: 8px; }
+
+    .toast {
+      position: fixed; right: 20px; bottom: 20px;
+      background: #0b1f3a; color: #e8eef2;
+      padding: 12px 16px; border-radius: 10px;
+      font-size: 0.88rem; box-shadow: var(--shadow);
+      opacity: 0; transform: translateY(8px);
+      transition: .2s; z-index: 60; pointer-events: none;
+    }
+    .toast.show { opacity: 1; transform: none; }
+
+    .proto-bar {
+      position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%);
+      background: #0b1f3a; color: #9fb3c0;
+      font-size: 0.75rem; padding: 8px 14px; border-radius: 999px;
+      z-index: 40; box-shadow: var(--shadow);
+      display: flex; gap: 10px; align-items: center;
+      white-space: nowrap;
+    }
+    .proto-bar strong { color: #93c5fd; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <!-- LOGIN -->
+  <section id="view-login" class="view active">
+    <div class="login-card">
+      <div class="brand-mark">
+        <div class="logo">XF</div>
+        <div>
+          <h1>XDP Forward Panel</h1>
+          <p>eBPF 转发 · 防火墙 · Telegram</p>
+        </div>
+      </div>
+      <form id="login-form" onsubmit="return doLogin(event)">
+        <div class="field">
+          <label>用户名</label>
+          <input value="admin" autocomplete="username" />
+        </div>
+        <div class="field">
+          <label>密码</label>
+          <input type="password" value="••••••••" autocomplete="current-password" />
+        </div>
+        <button class="btn btn-primary btn-block" type="submit">登录</button>
+      </form>
+      <p class="login-hint">原型演示 · 任意密码可进入 · 生产使用 bcrypt + 会话</p>
+    </div>
+  </section>
+
+  <!-- APP -->
+  <section id="view-app" class="view">
+    <aside class="nav">
+      <div class="brand">
+        <div class="logo">XF</div>
+        <div>
+          <strong>XDP Panel</strong>
+          <span>v0.1 原型</span>
+        </div>
+      </div>
+      <button class="nav-item active" data-page="dash" onclick="goPage('dash', this)"><span class="ico">▣</span>仪表盘</button>
+      <button class="nav-item" data-page="fwd" onclick="goPage('fwd', this)"><span class="ico">⇄</span>转发规则</button>
+      <button class="nav-item" data-page="ports" onclick="goPage('ports', this)"><span class="ico">⬡</span>防火墙端口</button>
+      <button class="nav-item" data-page="tg" onclick="goPage('tg', this)"><span class="ico">✈</span>Telegram</button>
+      <button class="nav-item" data-page="logs" onclick="goPage('logs', this)"><span class="ico">≡</span>操作日志</button>
+      <button class="nav-item" data-page="settings" onclick="goPage('settings', this)"><span class="ico">⚙</span>面板设置</button>
+      <div class="nav-foot">
+        主机
+        <div class="host">Breadcloud-jp · :2888</div>
+        <button class="btn btn-ghost btn-sm" style="margin-top:10px;width:100%;color:#a8bbc8;border-color:rgba(255,255,255,.12)" onclick="doLogout()">退出登录</button>
+      </div>
+    </aside>
+
+    <div class="main">
+      <!-- DASHBOARD -->
+      <div id="page-dash" class="page active">
+        <div class="page-head">
+          <div>
+            <h2>仪表盘</h2>
+            <p class="sub">主机状态、XDP 模式与流量概览</p>
+          </div>
+          <div class="actions">
+            <button class="btn btn-ghost btn-sm" onclick="toast('已刷新（原型）')">刷新</button>
+          </div>
+        </div>
+
+        <div class="banner warn">
+          <strong>⚠</strong>
+          <div>
+            <strong>XDP 在 netfilter 之前执行。</strong>
+            命中转发规则的流量会绕过 ufw / nftables / iptables。面板端口与本机监听状态仍会标注「XDP 占用」。
+          </div>
+        </div>
+
+        <div class="grid grid-4" style="margin-bottom:16px">
+          <div class="stat">
+            <div class="label">XDP 模式</div>
+            <div class="value" style="color:var(--accent)">native</div>
+            <div class="meta">eth0 · 驱动支持</div>
+          </div>
+          <div class="stat">
+            <div class="label">转发规则</div>
+            <div class="value">3</div>
+            <div class="meta">2 启用 · 1 停用</div>
+          </div>
+          <div class="stat">
+            <div class="label">开放端口</div>
+            <div class="value">5</div>
+            <div class="meta">后端：nftables</div>
+          </div>
+          <div class="stat">
+            <div class="label">今日转发</div>
+            <div class="value">1.2<span style="font-size:.9rem"> GB</span></div>
+            <div class="meta">4.8M packets</div>
+          </div>
+        </div>
+
+        <div class="grid grid-2">
+          <div class="panel">
+            <div class="panel-h"><h3>活跃转发（Top）</h3><span class="tag tag-info">实时</span></div>
+            <div class="panel-b">
+              <table>
+                <thead><tr><th>规则</th><th>协议</th><th>包数</th><th>字节</th></tr></thead>
+                <tbody>
+                  <tr>
+                    <td class="mono">:8080 → 1.2.3.4:80</td>
+                    <td><span class="tag tag-ok">tcp</span></td>
+                    <td class="mono">2.1M</td>
+                    <td class="mono">890 MB</td>
+                  </tr>
+                  <tr>
+                    <td class="mono">:8443 → 1.2.3.4:443</td>
+                    <td><span class="tag tag-ok">tcp</span></td>
+                    <td class="mono">980K</td>
+                    <td class="mono">310 MB</td>
+                  </tr>
+                  <tr>
+                    <td class="mono">:5300 → 8.8.8.8:53</td>
+                    <td><span class="tag tag-info">udp</span></td>
+                    <td class="mono">12K</td>
+                    <td class="mono">1.8 MB</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-h"><h3>系统探测</h3></div>
+            <div class="panel-b">
+              <table>
+                <tbody>
+                  <tr><td>内核</td><td class="mono">5.15.0-119-generic</td></tr>
+                  <tr><td>发行版</td><td class="mono">Ubuntu 22.04.5 LTS</td></tr>
+                  <tr><td>防火墙后端</td><td><span class="tag tag-ok">nftables</span></td></tr>
+                  <tr><td>SNAT 保留口</td><td class="mono">40000-49999</td></tr>
+                  <tr><td>TG Bot</td><td><span class="tag tag-ok">online</span></td></tr>
+                  <tr><td>面板监听</td><td class="mono">0.0.0.0:2888</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- FORWARD -->
+      <div id="page-fwd" class="page">
+        <div class="page-head">
+          <div>
+            <h2>转发规则</h2>
+            <p class="sub">XDP DNAT+SNAT · IPv4 · 非分片</p>
+          </div>
+          <div class="actions">
+            <button class="btn btn-primary" onclick="openModal('modal-add-fwd')">＋ 添加规则</button>
+          </div>
+        </div>
+        <div class="banner info">
+          <strong>ℹ</strong>
+          <div>加载顺序：native → generic。两种都失败则服务报错启动失败，不会静默降级到其他转发方案。</div>
+        </div>
+        <div class="panel">
+          <div class="panel-b">
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th><th>本地端口</th><th>目标</th><th>协议</th>
+                  <th>状态</th><th>包 / 字节</th><th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td class="mono">#1</td>
+                  <td class="mono">8080</td>
+                  <td class="mono">1.2.3.4:80</td>
+                  <td><span class="tag tag-ok">tcp</span></td>
+                  <td><span class="tag tag-ok">enabled</span></td>
+                  <td class="mono">2.1M / 890MB</td>
+                  <td>
+                    <button class="btn btn-ghost btn-sm" onclick="toast('已停用 #1')">停用</button>
+                    <button class="btn btn-ghost btn-sm" onclick="confirmDanger('删除转发 #1？', '此操作会立刻停止 XDP 映射。')">删除</button>
+                  </td>
+                </tr>
+                <tr>
+                  <td class="mono">#2</td>
+                  <td class="mono">8443</td>
+                  <td class="mono">1.2.3.4:443</td>
+                  <td><span class="tag tag-ok">tcp</span></td>
+                  <td><span class="tag tag-ok">enabled</span></td>
+                  <td class="mono">980K / 310MB</td>
+                  <td>
+                    <button class="btn btn-ghost btn-sm" onclick="toast('已停用 #2')">停用</button>
+                    <button class="btn btn-ghost btn-sm" onclick="confirmDanger('删除转发 #2？', '此操作会立刻停止 XDP 映射。')">删除</button>
+                  </td>
+                </tr>
+                <tr>
+                  <td class="mono">#3</td>
+                  <td class="mono">5300</td>
+                  <td class="mono">8.8.8.8:53</td>
+                  <td><span class="tag tag-info">udp</span></td>
+                  <td><span class="tag tag-off">disabled</span></td>
+                  <td class="mono">12K / 1.8MB</td>
+                  <td>
+                    <button class="btn btn-ghost btn-sm" onclick="toast('已启用 #3')">启用</button>
+                    <button class="btn btn-ghost btn-sm" onclick="confirmDanger('删除转发 #3？', '此操作会立刻停止 XDP 映射。')">删除</button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- PORTS -->
+      <div id="page-ports" class="page">
+        <div class="page-head">
+          <div>
+            <h2>防火墙端口</h2>
+            <p class="sub">三层状态：防火墙 · 本机监听 · XDP 占用</p>
+          </div>
+          <div class="actions">
+            <button class="btn btn-primary" onclick="openModal('modal-open-port')">打开端口</button>
+          </div>
+        </div>
+        <div class="banner warn">
+          <strong>⚠</strong>
+          <div>关闭 <strong>SSH（本机 22282）</strong> 或 <strong>面板 2888</strong> 需要二次确认。当前防火墙后端：<span class="mono">nftables</span></div>
+        </div>
+        <div class="panel">
+          <div class="panel-b">
+            <table>
+              <thead>
+                <tr>
+                  <th>端口</th><th>协议</th>
+                  <th>防火墙</th><th>本机监听</th><th>XDP</th>
+                  <th>开关</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td class="mono">22282 <span class="tag tag-warn">SSH</span></td>
+                  <td>tcp</td>
+                  <td><span class="tag tag-ok">open</span></td>
+                  <td><span class="tag tag-ok">sshd</span></td>
+                  <td><span class="tag tag-off">—</span></td>
+                  <td><button class="toggle on" title="关闭需确认" onclick="confirmDanger('关闭 SSH 端口 22282？', '可能导致无法远程登录。请确认有控制台备用。', this)"></button></td>
+                </tr>
+                <tr>
+                  <td class="mono">2888 <span class="tag tag-warn">Panel</span></td>
+                  <td>tcp</td>
+                  <td><span class="tag tag-ok">open</span></td>
+                  <td><span class="tag tag-ok">xdp-panel</span></td>
+                  <td><span class="tag tag-off">—</span></td>
+                  <td><button class="toggle on" onclick="confirmDanger('关闭面板端口 2888？', '关闭后 Web 面板将无法访问。', this)"></button></td>
+                </tr>
+                <tr>
+                  <td class="mono">80</td>
+                  <td>tcp</td>
+                  <td><span class="tag tag-ok">open</span></td>
+                  <td><span class="tag tag-off">无</span></td>
+                  <td><span class="tag tag-off">—</span></td>
+                  <td><button class="toggle on" onclick="this.classList.toggle('on'); toast(this.classList.contains('on')?'已打开 80':'已关闭 80')"></button></td>
+                </tr>
+                <tr>
+                  <td class="mono">8080</td>
+                  <td>tcp</td>
+                  <td><span class="tag tag-ok">open</span></td>
+                  <td><span class="tag tag-off">无</span></td>
+                  <td><span class="tag tag-xdp">fwd #1</span></td>
+                  <td><button class="toggle on" onclick="this.classList.toggle('on'); toast('注意：XDP 仍可能转发此端口')"></button></td>
+                </tr>
+                <tr>
+                  <td class="mono">443</td>
+                  <td>tcp</td>
+                  <td><span class="tag tag-off">closed</span></td>
+                  <td><span class="tag tag-off">无</span></td>
+                  <td><span class="tag tag-off">—</span></td>
+                  <td><button class="toggle" onclick="this.classList.toggle('on'); toast(this.classList.contains('on')?'已打开 443':'已关闭 443')"></button></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- TG -->
+      <div id="page-tg" class="page">
+        <div class="page-head">
+          <div>
+            <h2>Telegram 设置</h2>
+            <p class="sub">仅白名单管理员 ID 可操作；危险命令需按钮确认</p>
+          </div>
+        </div>
+        <div class="grid grid-2">
+          <div class="panel">
+            <div class="panel-h"><h3>Bot 配置</h3><span class="tag tag-ok">已连接</span></div>
+            <div class="form-box">
+              <div class="field">
+                <label>Bot Token</label>
+                <input class="mono" type="password" value="123456:AAHxxxxxxxx" />
+              </div>
+              <div class="field">
+                <label>管理员 ID（逗号分隔）</label>
+                <input class="mono" value="10001,10002" />
+              </div>
+              <div class="field">
+                <label>启用机器人</label>
+                <button class="toggle on" onclick="this.classList.toggle('on')"></button>
+              </div>
+              <button class="btn btn-primary" onclick="toast('已保存 TG 设置（原型）')">保存</button>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-h"><h3>支持命令</h3></div>
+            <div class="panel-b">
+              <table>
+                <tbody>
+                  <tr><td class="mono">/status</td><td>主机与 XDP 状态</td></tr>
+                  <tr><td class="mono">/ports</td><td>端口三层状态</td></tr>
+                  <tr><td class="mono">/open 80 tcp</td><td>打开防火墙端口</td></tr>
+                  <tr><td class="mono">/close 80 tcp</td><td>关闭（按钮确认）</td></tr>
+                  <tr><td class="mono">/fwd add …</td><td>添加转发规则</td></tr>
+                  <tr><td class="mono">/fwd del &lt;id&gt;</td><td>删除（按钮确认）</td></tr>
+                  <tr><td class="mono">/fwd list</td><td>规则列表</td></tr>
+                  <tr><td class="mono">/stats</td><td>流量统计</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- LOGS -->
+      <div id="page-logs" class="page">
+        <div class="page-head">
+          <div>
+            <h2>操作日志</h2>
+            <p class="sub">Web / Telegram 操作审计</p>
+          </div>
+          <div class="actions">
+            <button class="btn btn-ghost btn-sm" onclick="toast('已导出（原型）')">导出</button>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-b">
+            <table>
+              <thead>
+                <tr><th>时间</th><th>来源</th><th>操作者</th><th>动作</th><th>结果</th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td class="mono">2026-11-06 10:21:03</td>
+                  <td><span class="tag tag-info">web</span></td>
+                  <td>admin</td>
+                  <td class="mono">fwd.add 8080→1.2.3.4:80 tcp</td>
+                  <td><span class="tag tag-ok">ok</span></td>
+                </tr>
+                <tr>
+                  <td class="mono">2026-11-06 10:18:44</td>
+                  <td><span class="tag tag-xdp">tg</span></td>
+                  <td class="mono">uid:10001</td>
+                  <td class="mono">ports.open 80 tcp</td>
+                  <td><span class="tag tag-ok">ok</span></td>
+                </tr>
+                <tr>
+                  <td class="mono">2026-11-06 09:55:12</td>
+                  <td><span class="tag tag-xdp">tg</span></td>
+                  <td class="mono">uid:10001</td>
+                  <td class="mono">ports.close 22282 tcp</td>
+                  <td><span class="tag tag-warn">cancelled</span></td>
+                </tr>
+                <tr>
+                  <td class="mono">2026-11-06 09:40:01</td>
+                  <td><span class="tag tag-info">web</span></td>
+                  <td>admin</td>
+                  <td class="mono">auth.login</td>
+                  <td><span class="tag tag-ok">ok</span></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- SETTINGS -->
+      <div id="page-settings" class="page">
+        <div class="page-head">
+          <div>
+            <h2>面板设置</h2>
+            <p class="sub">更新、访问路径、账号与 TLS</p>
+          </div>
+        </div>
+
+        <div class="grid grid-2" style="margin-bottom:14px">
+          <div class="panel">
+            <div class="panel-h"><h3>版本与更新</h3><span class="tag tag-info">自动检查</span></div>
+            <div class="form-box">
+              <div class="ver-row">
+                <div>
+                  <div class="name">面板程序</div>
+                  <div class="ver">当前 v0.1.0 · 最新 v0.1.0</div>
+                </div>
+                <button class="btn btn-ghost btn-sm" onclick="toast('已是最新面板（原型）')">检查更新</button>
+              </div>
+              <div class="ver-row">
+                <div>
+                  <div class="name">转发内核（XDP/BPF）</div>
+                  <div class="ver">当前 bpf 0.1.0 · 与面板配套</div>
+                </div>
+                <button class="btn btn-primary btn-sm" onclick="confirmDanger('更新转发内核？', '将重新加载 XDP 程序，短时可能中断转发流量。')">更新内核</button>
+              </div>
+              <div class="field" style="margin-top:12px;margin-bottom:0">
+                <label>自动更新</label>
+                <div style="display:flex;align-items:center;gap:12px">
+                  <button class="toggle on" onclick="this.classList.toggle('on')"></button>
+                  <span class="hint" style="margin:0">安装脚本定时拉取面板与 BPF；有更新则替换并重启服务</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-h"><h3>访问与路径</h3></div>
+            <div class="form-box">
+              <div class="field">
+                <label>面板监听端口</label>
+                <input class="mono" value="2888" />
+                <p class="hint">生产 HTTPS 自签证书由安装脚本生成；改端口后需放行防火墙。</p>
+              </div>
+              <div class="field">
+                <label>Web 访问路径前缀</label>
+                <input class="mono" value="/" placeholder="/" />
+                <p class="hint">例如设为 <span class="mono">/xfpanel/</span>，则登录地址为 <span class="mono">https://ip:2888/xfpanel/</span>，降低被扫概率。</p>
+              </div>
+              <div class="field">
+                <label>绑定地址</label>
+                <select>
+                  <option>0.0.0.0（全部网卡）</option>
+                  <option>127.0.0.1（仅本机）</option>
+                </select>
+              </div>
+              <button class="btn btn-primary" onclick="toast('访问设置已保存（原型）')">保存</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid grid-2">
+          <div class="panel">
+            <div class="panel-h"><h3>账号</h3></div>
+            <div class="form-box">
+              <div class="field">
+                <label>用户名</label>
+                <input value="admin" />
+              </div>
+              <div class="field">
+                <label>新密码</label>
+                <input type="password" placeholder="留空则不修改" />
+              </div>
+              <div class="field">
+                <label>确认新密码</label>
+                <input type="password" placeholder="再次输入" />
+              </div>
+              <p class="hint" style="margin-bottom:12px">安装时随机生成初始密码并打印到终端；此处可改用户名与密码（bcrypt）。</p>
+              <button class="btn btn-primary" onclick="toast('账号已更新（原型）')">保存账号</button>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-h"><h3>转发与 TLS</h3></div>
+            <div class="form-box">
+              <div class="field">
+                <label>SNAT 保留端口段</label>
+                <input class="mono" value="40000-49999" />
+                <p class="hint">写入 <span class="mono">ip_local_reserved_ports</span>，仅禁止内核把这段分给本机服务；<strong>不会</strong>打开防火墙。避免与 XDP SNAT 抢端口。</p>
+              </div>
+              <div class="field">
+                <label>TLS 证书</label>
+                <div class="stack-status">
+                  <span class="tag tag-ok">自签 · 有效</span>
+                  <span class="tag tag-info">自动续签脚本</span>
+                </div>
+                <p class="hint">安装时生成自签证书；到期由更新任务轮换。浏览器会提示不受信任，属预期。</p>
+              </div>
+              <div class="field">
+                <label>更新通道 URL</label>
+                <input class="mono" value="https://example.com/xdp-forward-panel/releases" />
+              </div>
+              <button class="btn btn-ghost" onclick="toast('已重新生成自签证书（原型）')">重新生成证书</button>
+              <button class="btn btn-primary" onclick="toast('转发/TLS 设置已保存（原型）')">保存</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Modals -->
+  <div id="modal-add-fwd" class="modal-backdrop" onclick="backdropClose(event, this)">
+    <div class="modal">
+      <h3>添加转发规则</h3>
+      <p>本地端口命中后 DNAT+SNAT 到目标。仅 IPv4。</p>
+      <div class="form-row">
+        <div class="field"><label>本地端口</label><input class="mono" placeholder="8080" /></div>
+        <div class="field"><label>协议</label><select><option>tcp</option><option>udp</option></select></div>
+      </div>
+      <div class="form-row">
+        <div class="field"><label>目标 IP</label><input class="mono" placeholder="1.2.3.4" /></div>
+        <div class="field"><label>目标端口</label><input class="mono" placeholder="80" /></div>
+      </div>
+      <div class="row">
+        <button class="btn btn-ghost" onclick="closeModals()">取消</button>
+        <button class="btn btn-primary" onclick="closeModals(); toast('规则已添加（原型）')">创建</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="modal-open-port" class="modal-backdrop" onclick="backdropClose(event, this)">
+    <div class="modal">
+      <h3>打开端口</h3>
+      <p>写入当前检测到的防火墙后端（nftables）。</p>
+      <div class="form-row">
+        <div class="field"><label>端口</label><input class="mono" placeholder="80" /></div>
+        <div class="field"><label>协议</label><select><option>tcp</option><option>udp</option></select></div>
+      </div>
+      <div class="row">
+        <button class="btn btn-ghost" onclick="closeModals()">取消</button>
+        <button class="btn btn-primary" onclick="closeModals(); toast('端口已打开（原型）')">打开</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="modal-danger" class="modal-backdrop" onclick="backdropClose(event, this)">
+    <div class="modal">
+      <h3 id="danger-title">确认危险操作</h3>
+      <p id="danger-body">此操作不可轻易撤销。</p>
+      <div class="row">
+        <button class="btn btn-ghost" onclick="closeModals()">取消</button>
+        <button class="btn btn-danger" onclick="closeModals(); toast('已确认（原型）')">确认执行</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+  <div class="proto-bar">高保真原型 · <strong>请确认后再开发</strong> · 打开 <span class="mono">prototype/index.html</span></div>
+
+  <script>
+    function doLogin(e) {
+      e.preventDefault();
+      document.getElementById('view-login').classList.remove('active');
+      document.getElementById('view-app').classList.add('active');
+      return false;
+    }
+    function doLogout() {
+      document.getElementById('view-app').classList.remove('active');
+      document.getElementById('view-login').classList.add('active');
+    }
+    function goPage(id, el) {
+      document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+      document.getElementById('page-' + id).classList.add('active');
+      document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+      if (el) el.classList.add('active');
+    }
+    function openModal(id) {
+      document.getElementById(id).classList.add('show');
+    }
+    function closeModals() {
+      document.querySelectorAll('.modal-backdrop').forEach(m => m.classList.remove('show'));
+    }
+    function backdropClose(e, el) {
+      if (e.target === el) closeModals();
+    }
+    function confirmDanger(title, body, toggleEl) {
+      document.getElementById('danger-title').textContent = title;
+      document.getElementById('danger-body').textContent = body;
+      openModal('modal-danger');
+      if (toggleEl) {
+        // prototype: keep on until confirmed — no state change
+      }
+    }
+    function toast(msg) {
+      const t = document.getElementById('toast');
+      t.textContent = msg;
+      t.classList.add('show');
+      clearTimeout(window.__tt);
+      window.__tt = setTimeout(() => t.classList.remove('show'), 2200);
+    }
+  </script>
+</body>
+</html>

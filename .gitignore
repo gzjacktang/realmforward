@@ -1,0 +1,24 @@
+# secrets & local
+.env
+*.pem
+*.key
+config.yaml
+*.db
+*.sqlite
+*.sqlite3
+
+# build
+project/backend/bin/
+project/backend/bpf/*.o
+project/frontend/dist/
+project/frontend/node_modules/
+*.exe
+/var/
+*.db
+config.json
+
+# ide / os
+.DS_Store
+.idea/
+.vscode/
+*.swp

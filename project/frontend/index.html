@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>XDP Forward Panel</title>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="app.css" />
+</head>
+<body>
+  <section id="view-login" class="view active">
+    <div class="login-card">
+      <div class="brand-mark"><div class="logo">XF</div><div><h1>XDP Forward Panel</h1><p>eBPF 转发 · 防火墙 · Telegram</p></div></div>
+      <form id="login-form">
+        <div class="field"><label>用户名</label><input id="login-user" value="admin" autocomplete="username" /></div>
+        <div class="field"><label>密码</label><input id="login-pass" type="password" autocomplete="current-password" /></div>
+        <button class="btn btn-primary btn-block" type="submit">登录</button>
+        <p id="login-err" class="err"></p>
+      </form>
+    </div>
+  </section>
+
+  <section id="view-app" class="view">
+    <aside class="nav">
+      <div class="brand"><div class="logo">XF</div><div><strong>XDP Panel</strong><span id="nav-ver">v0.1.0</span></div></div>
+      <button class="nav-item active" data-page="dash">仪表盘</button>
+      <button class="nav-item" data-page="fwd">转发规则</button>
+      <button class="nav-item" data-page="ports">防火墙端口</button>
+      <button class="nav-item" data-page="tg">Telegram</button>
+      <button class="nav-item" data-page="logs">操作日志</button>
+      <button class="nav-item" data-page="settings">面板设置</button>
+      <div class="nav-foot"><button class="btn btn-ghost btn-sm" id="btn-logout" style="width:100%">退出</button></div>
+    </aside>
+    <div class="main">
+      <div id="page-dash" class="page active"></div>
+      <div id="page-fwd" class="page"></div>
+      <div id="page-ports" class="page"></div>
+      <div id="page-tg" class="page"></div>
+      <div id="page-logs" class="page"></div>
+      <div id="page-settings" class="page"></div>
+    </div>
+  </section>
+  <div class="toast" id="toast"></div>
+  <script src="app.js"></script>
+</body>
+</html>
