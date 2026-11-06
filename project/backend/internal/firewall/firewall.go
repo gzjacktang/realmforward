@@ -37,6 +37,99 @@ func Detect() *Manager {
 	return &Manager{Backend: BackendNone}
 }
 
+// Active reports whether a deny-by-default firewall is in effect (best-effort).
+func (m *Manager) Active() bool {
+	switch m.Backend {
+	case BackendUFW:
+		out, err := exec.Command("ufw", "status").CombinedOutput()
+		return err == nil && strings.Contains(string(out), "Status: active")
+	case BackendIptables:
+		out, err := exec.Command("iptables", "-L", "INPUT", "-n").CombinedOutput()
+		if err != nil {
+			return false
+		}
+		for _, line := range strings.Split(string(out), "\n") {
+			if strings.HasPrefix(line, "Chain INPUT") && strings.Contains(line, "policy DROP") {
+				return true
+			}
+		}
+		return false
+	case BackendNftables:
+		out, err := exec.Command("nft", "list", "chain", "inet", "xfp", "input").CombinedOutput()
+		return err == nil && strings.Contains(string(out), "policy drop")
+	default:
+		return false
+	}
+}
+
+// EnsureBaseRules installs lo + ESTABLISHED accepts needed before a DROP policy.
+func (m *Manager) EnsureBaseRules() error {
+	switch m.Backend {
+	case BackendUFW:
+		return nil // ufw manages this
+	case BackendIptables:
+		_ = ensureIptables("-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT")
+		_ = ensureIptables("-i", "lo", "-j", "ACCEPT")
+		return nil
+	case BackendNftables:
+		_ = run("nft", "add", "table", "inet", "xfp")
+		_ = run("nft", "add", "chain", "inet", "xfp", "input", "{", "type", "filter", "hook", "input", "priority", "0", ";", "policy", "accept", ";", "}")
+		out, _ := exec.Command("nft", "list", "chain", "inet", "xfp", "input").CombinedOutput()
+		s := string(out)
+		if !strings.Contains(s, "ct state established") && !strings.Contains(s, "ct state { established") {
+			_ = run("nft", "insert", "rule", "inet", "xfp", "input", "ct", "state", "established,related", "accept")
+		}
+		if !strings.Contains(s, "iif \"lo\"") && !strings.Contains(s, "iifname \"lo\"") {
+			_ = run("nft", "insert", "rule", "inet", "xfp", "input", "iif", "lo", "accept")
+		}
+		return nil
+	default:
+		return fmt.Errorf("no firewall backend detected")
+	}
+}
+
+func ensureIptables(args ...string) error {
+	checkArgs := append([]string{"-C", "INPUT"}, args...)
+	if exec.Command("iptables", checkArgs...).Run() == nil {
+		return nil
+	}
+	insArgs := append([]string{"-I", "INPUT"}, args...)
+	return run("iptables", insArgs...)
+}
+
+// EnableDenyIncoming turns on default-deny inbound.
+// Prefer ufw when installed (even if previously inactive).
+func (m *Manager) EnableDenyIncoming() error {
+	if _, err := exec.LookPath("ufw"); err == nil {
+		m.Backend = BackendUFW
+		_ = run("ufw", "default", "deny", "incoming")
+		_ = run("ufw", "default", "allow", "outgoing")
+		if err := run("ufw", "--force", "enable"); err != nil {
+			return err
+		}
+		return nil
+	}
+	if err := m.EnsureBaseRules(); err != nil {
+		return err
+	}
+	switch m.Backend {
+	case BackendIptables:
+		return run("iptables", "-P", "INPUT", "DROP")
+	case BackendNftables:
+		_ = run("nft", "add", "table", "inet", "xfp")
+		_ = run("nft", "delete", "chain", "inet", "xfp", "input")
+		if err := run("nft", "add", "chain", "inet", "xfp", "input", "{", "type", "filter", "hook", "input", "priority", "0", ";", "policy", "drop", ";", "}"); err != nil {
+			return err
+		}
+		return m.EnsureBaseRules()
+	case BackendUFW:
+		_ = run("ufw", "default", "deny", "incoming")
+		return run("ufw", "--force", "enable")
+	default:
+		return fmt.Errorf("no firewall backend detected")
+	}
+}
+
 func expandFWProtos(proto string) []string {
 	switch strings.ToLower(proto) {
 	case "both", "tcp+udp", "all":

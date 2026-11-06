@@ -252,11 +252,15 @@ async function renderPorts(el, page) {
   window.__portsPage = cur;
   const slice = all.slice((cur - 1) * pageSize, cur * pageSize);
 
+  const fwActive = !!data.fw_active;
   el.innerHTML = `
     <div class="page-head"><div><h2>防火墙端口</h2>
-      <p class="sub">三层状态 · 后端 ${data.backend} · 共 ${total} 条 · 每页 ${pageSize}</p></div>
-      <button class="btn btn-primary" id="btn-open-port">打开端口</button></div>
-    <div class="banner warn"><strong>⚠</strong><div>关闭 SSH（${data.ssh_port}）或面板端口需二次确认。无监听且无 XDP 的端口关闭后会从列表移除。</div></div>
+      <p class="sub">三层状态 · 后端 ${data.backend}${fwActive ? " · 已启用默认拒绝" : " · 未加固"} · 共 ${total} 条 · 每页 ${pageSize}</p></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-ghost" id="btn-harden-fw">一键开启防火墙</button>
+        <button class="btn btn-primary" id="btn-open-port">打开端口</button>
+      </div></div>
+    <div class="banner warn"><strong>⚠</strong><div>「一键开启防火墙」会启用默认拒绝入站，仅保留 SSH（${data.ssh_port}）、面板、本机监听与 XDP 转发端口；其余已放行端口会关闭。关闭受保护端口需二次确认。</div></div>
     <div class="panel"><table>
       <thead><tr><th>端口</th><th>协议</th><th>防火墙</th><th>监听</th><th>XDP</th><th></th></tr></thead>
       <tbody>${slice.map((p) => `<tr>
@@ -284,6 +288,22 @@ async function renderPorts(el, page) {
 
   document.getElementById("ports-prev").onclick = () => renderPorts(el, cur - 1);
   document.getElementById("ports-next").onclick = () => renderPorts(el, cur + 1);
+
+  document.getElementById("btn-harden-fw").onclick = async () => {
+    if (!confirm("将开启防火墙（默认拒绝入站），并关闭所有无业务监听 / 无 XDP 转发的已放行端口。\n\n会保留：SSH、面板、本机监听、已启用转发端口。\n确认继续？")) {
+      return;
+    }
+    try {
+      const res = await api("/ports/harden", { method: "POST", body: "{}" });
+      const closedN = (res.closed || []).length;
+      const keptN = (res.kept || []).length;
+      toast(`防火墙已开启（${res.backend}）：保留 ${keptN} · 关闭 ${closedN}`);
+      window.__portsPage = 1;
+      renderPorts(el, 1);
+    } catch (ex) {
+      toast("开启失败: " + ex.message);
+    }
+  };
 
   document.getElementById("btn-open-port").onclick = async () => {
     const port = prompt("端口号");

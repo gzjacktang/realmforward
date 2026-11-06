@@ -56,6 +56,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc(api("/ports"), s.requireAuth(s.handlePorts))
 	mux.HandleFunc(api("/ports/open"), s.requireAuth(s.handlePortOpen))
 	mux.HandleFunc(api("/ports/close"), s.requireAuth(s.handlePortClose))
+	mux.HandleFunc(api("/ports/harden"), s.requireAuth(s.handlePortsHarden))
 	mux.HandleFunc(api("/tg"), s.requireAuth(s.handleTG))
 	mux.HandleFunc(api("/logs"), s.requireAuth(s.handleLogs))
 	mux.HandleFunc(api("/settings"), s.requireAuth(s.handleSettings))
@@ -461,7 +462,103 @@ func (s *Server) handlePorts(w http.ResponseWriter, r *http.Request) {
 		}
 		return out[i].Port < out[j].Port
 	})
-	writeJSON(w, map[string]any{"backend": s.FW.Backend, "ports": out, "ssh_port": s.SSHPort, "page_size": 20})
+	writeJSON(w, map[string]any{
+		"backend":     s.FW.Backend,
+		"ports":       out,
+		"ssh_port":    s.SSHPort,
+		"page_size":   20,
+		"fw_active":   s.FW.Active(),
+	})
+}
+
+// handlePortsHarden enables default-deny firewall and closes ports with no
+// business (no listener, no XDP forward, not SSH/panel). Keeps business ports open.
+func (s *Server) handlePortsHarden(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, "method")
+		return
+	}
+	cfg := s.Cfg.Get()
+	rules, _ := s.Store.ListForwards()
+	listenSnap := listen.Snapshot()
+
+	type keepKey struct {
+		port  int
+		proto string
+	}
+	keep := map[keepKey]string{} // reason
+	var addKeep func(port int, proto, reason string)
+	addKeep = func(port int, proto, reason string) {
+		proto = strings.ToLower(proto)
+		if proto == "both" || proto == "tcp+udp" || proto == "all" {
+			addKeep(port, "tcp", reason)
+			addKeep(port, "udp", reason)
+			return
+		}
+		if port <= 0 {
+			return
+		}
+		keep[keepKey{port, proto}] = reason
+	}
+	addKeep(cfg.ListenPort, "tcp", "panel")
+	if s.SSHPort > 0 {
+		addKeep(s.SSHPort, "tcp", "ssh")
+	}
+	for _, e := range listenSnap {
+		addKeep(e.Port, e.Proto, "listen")
+	}
+	for _, fr := range rules {
+		if !fr.Enabled {
+			continue
+		}
+		addKeep(fr.LocalPort, fr.Proto, "xdp")
+	}
+
+	// Open business ports first (before DROP policy).
+	var opened []string
+	for k, reason := range keep {
+		if err := s.FW.Open(k.port, k.proto); err != nil {
+			writeErr(w, 500, fmt.Sprintf("放行 %d/%s 失败: %v", k.port, k.proto, err))
+			return
+		}
+		opened = append(opened, fmt.Sprintf("%d/%s(%s)", k.port, k.proto, reason))
+	}
+
+	// Close firewall allows that are not business.
+	var closed []string
+	for _, op := range s.FW.ListOpen() {
+		if _, ok := keep[keepKey{op.Port, op.Proto}]; ok {
+			continue
+		}
+		_ = s.FW.Close(op.Port, op.Proto)
+		closed = append(closed, fmt.Sprintf("%d/%s", op.Port, op.Proto))
+	}
+
+	if err := s.FW.EnsureBaseRules(); err != nil {
+		writeErr(w, 500, "基础规则失败: "+err.Error())
+		return
+	}
+	if err := s.FW.EnableDenyIncoming(); err != nil {
+		writeErr(w, 500, "开启防火墙失败: "+err.Error())
+		return
+	}
+	// Re-open after ufw enable / nft flush (EnableDenyIncoming may reset rules).
+	for k := range keep {
+		_ = s.FW.Open(k.port, k.proto)
+	}
+	_ = s.FW.EnsureBaseRules()
+
+	sort.Strings(opened)
+	sort.Strings(closed)
+	_ = s.Store.AddAudit("web", "admin", "ports.harden", "ok",
+		fmt.Sprintf("backend=%s kept=%d closed=%d", s.FW.Backend, len(keep), len(closed)))
+	writeJSON(w, map[string]any{
+		"ok":        true,
+		"backend":   s.FW.Backend,
+		"fw_active": s.FW.Active(),
+		"kept":      opened,
+		"closed":    closed,
+	})
 }
 
 func (s *Server) handlePortOpen(w http.ResponseWriter, r *http.Request) {
