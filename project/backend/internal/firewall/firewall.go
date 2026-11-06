@@ -367,27 +367,32 @@ func (m *Manager) closeNft(port int, proto string) error {
 	if err != nil {
 		return nil
 	}
-	needlePort := fmt.Sprintf("dport %d", port)
 	var handles []string
+	var restore []int
+	seenRestore := map[int]bool{}
 	for _, line := range strings.Split(string(out), "\n") {
 		if !strings.Contains(line, "accept") {
 			continue
 		}
-		if !strings.Contains(line, proto) {
-			continue
-		}
-		// single port
-		if strings.Contains(line, needlePort) {
-			if h := nftHandle(line); h != "" {
-				handles = append(handles, h)
+		// set form first: tcp dport { 80, 443, 14444 }
+		if sm := reNftSet.FindStringSubmatch(line); sm != nil && sm[1] == proto {
+			if csvHasPort(sm[2], port) {
+				if h := nftHandle(line); h != "" {
+					handles = append(handles, h)
+				}
+				// Deleting the whole set would close siblings — re-open the rest.
+				for _, p := range portsExcept(sm[2], port) {
+					if !seenRestore[p] {
+						seenRestore[p] = true
+						restore = append(restore, p)
+					}
+				}
 			}
 			continue
 		}
-		// set form: tcp dport { 80, 443, 14444 }
-		if m := reNftSet.FindStringSubmatch(line); m != nil && m[1] == proto {
-			if csvHasPort(m[2], port) {
-				// Cannot surgically remove one port from a set via handle delete of whole rule.
-				// Delete the set rule; caller/harden will re-open kept ports.
+		if dm := reNftDport.FindStringSubmatch(line); dm != nil && dm[1] == proto {
+			p, _ := strconv.Atoi(dm[2])
+			if p == port {
 				if h := nftHandle(line); h != "" {
 					handles = append(handles, h)
 				}
@@ -396,6 +401,9 @@ func (m *Manager) closeNft(port int, proto string) error {
 	}
 	for _, h := range handles {
 		_ = run("nft", "delete", "rule", ch.Family, ch.Table, ch.Chain, "handle", h)
+	}
+	for _, p := range restore {
+		_ = m.openNft(p, proto)
 	}
 	return nil
 }
@@ -418,6 +426,20 @@ func csvHasPort(csv string, port int) bool {
 		}
 	}
 	return false
+}
+
+// portsExcept parses an nft dport set CSV and returns ports other than exclude.
+func portsExcept(csv string, exclude int) []int {
+	var out []int
+	for _, part := range strings.Split(csv, ",") {
+		part = strings.TrimSpace(part)
+		p, err := strconv.Atoi(part)
+		if err != nil || p <= 0 || p == exclude {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
 }
 
 type OpenPort struct {
