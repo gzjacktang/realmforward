@@ -68,17 +68,17 @@ func (s *Store) migrate() error {
 	if _, err = s.db.Exec(string(schema)); err != nil {
 		return err
 	}
-	// probe whether proto=both is accepted; if not, rebuild table
-	tx, err := s.db.Begin()
+	// Rebuild table if proto CHECK does not yet allow 'both'.
+	// Inspect schema instead of INSERT/DELETE probe — the old probe burned
+	// AUTOINCREMENT id=1 so the first real rule showed up as #2.
+	var createSQL string
+	err = s.db.QueryRow(`SELECT sql FROM sqlite_master WHERE type='table' AND name='forward_rules'`).Scan(&createSQL)
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(`INSERT INTO forward_rules(local_port, dest_ip, dest_port, proto, enabled, note) VALUES(65534,'127.0.0.1',1,'both',0,'mig-probe')`)
-	if err == nil {
-		_, _ = tx.Exec(`DELETE FROM forward_rules WHERE local_port=65534 AND note='mig-probe'`)
-		return tx.Commit()
+	if strings.Contains(createSQL, "'both'") {
+		return nil
 	}
-	_ = tx.Rollback()
 
 	_, err = s.db.Exec(`
 CREATE TABLE forward_rules_mig (
