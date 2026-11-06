@@ -2,7 +2,9 @@ package firewall
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -16,8 +18,16 @@ const (
 	BackendNone     Backend = "none"
 )
 
+// nftChain is the real input filter chain we mutate (e.g. inet/filter/input).
+type nftChain struct {
+	Family string // inet | ip | ip6
+	Table  string // filter, …
+	Chain  string // input, INPUT, …
+}
+
 type Manager struct {
 	Backend Backend
+	nft     *nftChain // set when BackendNftables
 }
 
 func Detect() *Manager {
@@ -27,14 +37,110 @@ func Detect() *Manager {
 		}
 	}
 	if _, err := exec.LookPath("nft"); err == nil {
+		if ch := discoverNftInput(); ch != nil {
+			return &Manager{Backend: BackendNftables, nft: ch}
+		}
+		// nft present but no input hook yet — still prefer nft over legacy iptables-nft shim
 		if err := exec.Command("nft", "list", "ruleset").Run(); err == nil {
-			return &Manager{Backend: BackendNftables}
+			return &Manager{Backend: BackendNftables, nft: &nftChain{Family: "inet", Table: "filter", Chain: "input"}}
 		}
 	}
 	if _, err := exec.LookPath("iptables"); err == nil {
 		return &Manager{Backend: BackendIptables}
 	}
 	return &Manager{Backend: BackendNone}
+}
+
+var (
+	reNftTable = regexp.MustCompile(`(?m)^table\s+(inet|ip|ip6)\s+(\S+)\s*\{`)
+	reNftChain = regexp.MustCompile(`(?m)^\s*chain\s+(\S+)\s*\{`)
+	reNftHook  = regexp.MustCompile(`\btype\s+filter\b.*\bhook\s+input\b`)
+	reNftDport = regexp.MustCompile(`\b(tcp|udp)\s+dport\s+(\d+)\b`)
+	reNftSet   = regexp.MustCompile(`\b(tcp|udp)\s+dport\s+\{([^}]+)\}`)
+)
+
+// discoverNftInput finds the filter/input chain that actually drops/accepts traffic.
+// Prefer inet filter input, then any inet * input, then ip filter INPUT.
+func discoverNftInput() *nftChain {
+	out, err := exec.Command("nft", "-a", "list", "ruleset").CombinedOutput()
+	if err != nil {
+		return nil
+	}
+	text := string(out)
+	type cand struct {
+		ch       nftChain
+		priority int // lower = better
+	}
+	var cands []cand
+	family, table := "", ""
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		if m := reNftTable.FindStringSubmatch(line); m != nil {
+			family, table = m[1], m[2]
+			continue
+		}
+		if m := reNftChain.FindStringSubmatch(line); m != nil && family != "" {
+			chain := m[1]
+			// look ahead a few lines for hook input
+			window := line
+			for j := i + 1; j < len(lines) && j <= i+6; j++ {
+				window += " " + lines[j]
+				if strings.Contains(lines[j], "}") && !strings.Contains(lines[j], "{") {
+					break
+				}
+			}
+			if !reNftHook.MatchString(window) {
+				continue
+			}
+			ch := nftChain{Family: family, Table: table, Chain: chain}
+			prio := 100
+			if family == "inet" && table == "filter" && strings.EqualFold(chain, "input") {
+				prio = 0
+			} else if family == "inet" && strings.EqualFold(chain, "input") {
+				prio = 10
+			} else if family == "ip" && table == "filter" {
+				prio = 20
+			} else if family == "inet" {
+				prio = 30
+			}
+			cands = append(cands, cand{ch: ch, priority: prio})
+		}
+	}
+	if len(cands) == 0 {
+		return nil
+	}
+	best := cands[0]
+	for _, c := range cands[1:] {
+		if c.priority < best.priority {
+			best = c
+		}
+	}
+	return &best.ch
+}
+
+func (m *Manager) ensureNft() *nftChain {
+	if m.nft != nil {
+		return m.nft
+	}
+	if ch := discoverNftInput(); ch != nil {
+		m.nft = ch
+		return ch
+	}
+	m.nft = &nftChain{Family: "inet", Table: "filter", Chain: "input"}
+	return m.nft
+}
+
+func (m *Manager) nftRef() string {
+	ch := m.ensureNft()
+	return fmt.Sprintf("%s %s %s", ch.Family, ch.Table, ch.Chain)
+}
+
+// NftChain returns "family table chain" for UI/debug, or empty if not nft.
+func (m *Manager) NftChain() string {
+	if m.Backend != BackendNftables {
+		return ""
+	}
+	return m.nftRef()
 }
 
 // Active reports whether a deny-by-default firewall is in effect (best-effort).
@@ -55,8 +161,13 @@ func (m *Manager) Active() bool {
 		}
 		return false
 	case BackendNftables:
-		out, err := exec.Command("nft", "list", "chain", "inet", "xfp", "input").CombinedOutput()
-		return err == nil && strings.Contains(string(out), "policy drop")
+		ch := m.ensureNft()
+		out, err := exec.Command("nft", "list", "chain", ch.Family, ch.Table, ch.Chain).CombinedOutput()
+		if err != nil {
+			return false
+		}
+		s := strings.ToLower(string(out))
+		return strings.Contains(s, "policy drop") || strings.Contains(s, "policy drop;")
 	default:
 		return false
 	}
@@ -66,26 +177,35 @@ func (m *Manager) Active() bool {
 func (m *Manager) EnsureBaseRules() error {
 	switch m.Backend {
 	case BackendUFW:
-		return nil // ufw manages this
+		return nil
 	case BackendIptables:
 		_ = ensureIptables("-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT")
 		_ = ensureIptables("-i", "lo", "-j", "ACCEPT")
 		return nil
 	case BackendNftables:
-		_ = run("nft", "add", "table", "inet", "xfp")
-		_ = run("nft", "add", "chain", "inet", "xfp", "input", "{", "type", "filter", "hook", "input", "priority", "0", ";", "policy", "accept", ";", "}")
-		out, _ := exec.Command("nft", "list", "chain", "inet", "xfp", "input").CombinedOutput()
-		s := string(out)
-		if !strings.Contains(s, "ct state established") && !strings.Contains(s, "ct state { established") {
-			_ = run("nft", "insert", "rule", "inet", "xfp", "input", "ct", "state", "established,related", "accept")
-		}
-		if !strings.Contains(s, "iif \"lo\"") && !strings.Contains(s, "iifname \"lo\"") {
-			_ = run("nft", "insert", "rule", "inet", "xfp", "input", "iif", "lo", "accept")
-		}
-		return nil
+		return m.ensureNftBase()
 	default:
 		return fmt.Errorf("no firewall backend detected")
 	}
+}
+
+func (m *Manager) ensureNftBase() error {
+	ch := m.ensureNft()
+	_ = run("nft", "add", "table", ch.Family, ch.Table)
+	// ensure chain exists (keep existing policy if already there)
+	_ = run("nft", "add", "chain", ch.Family, ch.Table, ch.Chain,
+		"{", "type", "filter", "hook", "input", "priority", "0", ";", "policy", "drop", ";", "}")
+
+	out, _ := exec.Command("nft", "list", "chain", ch.Family, ch.Table, ch.Chain).CombinedOutput()
+	s := string(out)
+	if !strings.Contains(s, "established") {
+		_ = run("nft", "insert", "rule", ch.Family, ch.Table, ch.Chain,
+			"ct", "state", "established,related", "accept")
+	}
+	if !strings.Contains(s, `iif "lo"`) && !strings.Contains(s, "iif lo") && !strings.Contains(s, `iifname "lo"`) {
+		_ = run("nft", "insert", "rule", ch.Family, ch.Table, ch.Chain, "iif", "lo", "accept")
+	}
+	return nil
 }
 
 func ensureIptables(args ...string) error {
@@ -97,34 +217,55 @@ func ensureIptables(args ...string) error {
 	return run("iptables", insArgs...)
 }
 
-// EnableDenyIncoming turns on default-deny inbound.
-// Prefer ufw when installed (even if previously inactive).
+// EnableDenyIncoming turns on default-deny inbound on the *existing* backend.
+// Do NOT switch a live nftables host onto ufw just because the binary exists.
 func (m *Manager) EnableDenyIncoming() error {
-	if _, err := exec.LookPath("ufw"); err == nil {
-		m.Backend = BackendUFW
-		_ = run("ufw", "default", "deny", "incoming")
-		_ = run("ufw", "default", "allow", "outgoing")
-		if err := run("ufw", "--force", "enable"); err != nil {
-			return err
-		}
-		return nil
-	}
-	if err := m.EnsureBaseRules(); err != nil {
-		return err
-	}
 	switch m.Backend {
-	case BackendIptables:
-		return run("iptables", "-P", "INPUT", "DROP")
-	case BackendNftables:
-		_ = run("nft", "add", "table", "inet", "xfp")
-		_ = run("nft", "delete", "chain", "inet", "xfp", "input")
-		if err := run("nft", "add", "chain", "inet", "xfp", "input", "{", "type", "filter", "hook", "input", "priority", "0", ";", "policy", "drop", ";", "}"); err != nil {
-			return err
-		}
-		return m.EnsureBaseRules()
 	case BackendUFW:
 		_ = run("ufw", "default", "deny", "incoming")
+		_ = run("ufw", "default", "allow", "outgoing")
 		return run("ufw", "--force", "enable")
+	case BackendIptables:
+		if err := m.EnsureBaseRules(); err != nil {
+			return err
+		}
+		return run("iptables", "-P", "INPUT", "DROP")
+	case BackendNftables:
+		ch := m.ensureNft()
+		if err := m.ensureNftBase(); err != nil {
+			return err
+		}
+		// Force policy drop on the real input chain without wiping host rules:
+		// delete+recreate only if policy is not already drop.
+		out, _ := exec.Command("nft", "list", "chain", ch.Family, ch.Table, ch.Chain).CombinedOutput()
+		if strings.Contains(strings.ToLower(string(out)), "policy drop") {
+			return nil
+		}
+		// nft can't change policy in-place portably; add a jump table is riskier.
+		// Recreate chain: save accept dport rules, recreate with drop, restore + base.
+		ports := listNftChain(ch)
+		_ = run("nft", "delete", "chain", ch.Family, ch.Table, ch.Chain)
+		if err := run("nft", "add", "chain", ch.Family, ch.Table, ch.Chain,
+			"{", "type", "filter", "hook", "input", "priority", "0", ";", "policy", "drop", ";", "}"); err != nil {
+			return err
+		}
+		_ = m.ensureNftBase()
+		for _, p := range ports {
+			_ = m.openNft(p.Port, p.Proto)
+		}
+		return nil
+	case BackendNone:
+		// last resort: create inet filter if nft exists
+		if _, err := exec.LookPath("nft"); err == nil {
+			m.Backend = BackendNftables
+			m.nft = &nftChain{Family: "inet", Table: "filter", Chain: "input"}
+			return m.EnableDenyIncoming()
+		}
+		if _, err := exec.LookPath("ufw"); err == nil {
+			m.Backend = BackendUFW
+			return m.EnableDenyIncoming()
+		}
+		return fmt.Errorf("no firewall backend detected")
 	default:
 		return fmt.Errorf("no firewall backend detected")
 	}
@@ -146,6 +287,7 @@ func (m *Manager) Open(port int, proto string) error {
 			last = err
 		}
 	}
+	_ = m.persist()
 	return last
 }
 
@@ -154,15 +296,33 @@ func (m *Manager) openOne(port int, proto string) error {
 	case BackendUFW:
 		return run("ufw", "allow", fmt.Sprintf("%d/%s", port, proto))
 	case BackendNftables:
-		_ = run("nft", "add", "table", "inet", "xfp")
-		_ = run("nft", "add", "chain", "inet", "xfp", "input", "{", "type", "filter", "hook", "input", "priority", "0", ";", "policy", "accept", ";", "}")
-		return run("nft", "add", "rule", "inet", "xfp", "input", proto, "dport", strconv.Itoa(port), "accept", "comment", fmt.Sprintf("xfp-%d", port))
+		return m.openNft(port, proto)
 	case BackendIptables:
 		return m.openIptables(port, proto)
 	case BackendNone:
 		return fmt.Errorf("no firewall backend detected")
 	}
 	return nil
+}
+
+func (m *Manager) openNft(port int, proto string) error {
+	ch := m.ensureNft()
+	_ = m.ensureNftBase()
+	if m.nftHasAccept(ch, port, proto) {
+		return nil
+	}
+	comment := fmt.Sprintf("xfp-%d-%s", port, proto)
+	return run("nft", "add", "rule", ch.Family, ch.Table, ch.Chain,
+		proto, "dport", strconv.Itoa(port), "accept", "comment", comment)
+}
+
+func (m *Manager) nftHasAccept(ch *nftChain, port int, proto string) bool {
+	for _, p := range listNftChain(ch) {
+		if p.Port == port && p.Proto == proto {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Manager) openIptables(port int, proto string) error {
@@ -177,6 +337,7 @@ func (m *Manager) Close(port int, proto string) error {
 	for _, p := range expandFWProtos(proto) {
 		_ = m.closeOne(port, p)
 	}
+	_ = m.persist()
 	return nil
 }
 
@@ -185,29 +346,78 @@ func (m *Manager) closeOne(port int, proto string) error {
 	case BackendUFW:
 		return run("ufw", "delete", "allow", fmt.Sprintf("%d/%s", port, proto))
 	case BackendNftables:
-		out, err := exec.Command("nft", "-a", "list", "chain", "inet", "xfp", "input").CombinedOutput()
-		if err != nil {
-			return nil
-		}
-		needle := fmt.Sprintf("dport %d", port)
-		for _, line := range strings.Split(string(out), "\n") {
-			if strings.Contains(line, needle) && strings.Contains(line, proto) {
-				fields := strings.Fields(line)
-				for i, f := range fields {
-					if f == "handle" && i+1 < len(fields) {
-						_ = run("nft", "delete", "rule", "inet", "xfp", "input", "handle", fields[i+1])
-					}
-				}
-			}
-		}
-		return nil
+		return m.closeNft(port, proto)
 	case BackendIptables:
-		_ = run("iptables", "-D", "INPUT", "-p", proto, "--dport", strconv.Itoa(port), "-j", "ACCEPT")
+		for {
+			if exec.Command("iptables", "-C", "INPUT", "-p", proto, "--dport", strconv.Itoa(port), "-j", "ACCEPT").Run() != nil {
+				break
+			}
+			_ = run("iptables", "-D", "INPUT", "-p", proto, "--dport", strconv.Itoa(port), "-j", "ACCEPT")
+		}
 		return nil
 	case BackendNone:
 		return fmt.Errorf("no firewall backend detected")
 	}
 	return nil
+}
+
+func (m *Manager) closeNft(port int, proto string) error {
+	ch := m.ensureNft()
+	out, err := exec.Command("nft", "-a", "list", "chain", ch.Family, ch.Table, ch.Chain).CombinedOutput()
+	if err != nil {
+		return nil
+	}
+	needlePort := fmt.Sprintf("dport %d", port)
+	var handles []string
+	for _, line := range strings.Split(string(out), "\n") {
+		if !strings.Contains(line, "accept") {
+			continue
+		}
+		if !strings.Contains(line, proto) {
+			continue
+		}
+		// single port
+		if strings.Contains(line, needlePort) {
+			if h := nftHandle(line); h != "" {
+				handles = append(handles, h)
+			}
+			continue
+		}
+		// set form: tcp dport { 80, 443, 14444 }
+		if m := reNftSet.FindStringSubmatch(line); m != nil && m[1] == proto {
+			if csvHasPort(m[2], port) {
+				// Cannot surgically remove one port from a set via handle delete of whole rule.
+				// Delete the set rule; caller/harden will re-open kept ports.
+				if h := nftHandle(line); h != "" {
+					handles = append(handles, h)
+				}
+			}
+		}
+	}
+	for _, h := range handles {
+		_ = run("nft", "delete", "rule", ch.Family, ch.Table, ch.Chain, "handle", h)
+	}
+	return nil
+}
+
+func nftHandle(line string) string {
+	fields := strings.Fields(line)
+	for i, f := range fields {
+		if f == "handle" && i+1 < len(fields) {
+			return fields[i+1]
+		}
+	}
+	return ""
+}
+
+func csvHasPort(csv string, port int) bool {
+	for _, part := range strings.Split(csv, ",") {
+		part = strings.TrimSpace(part)
+		if part == strconv.Itoa(port) {
+			return true
+		}
+	}
+	return false
 }
 
 type OpenPort struct {
@@ -221,7 +431,7 @@ func (m *Manager) ListOpen() []OpenPort {
 	case BackendUFW:
 		return listUFW()
 	case BackendNftables:
-		return listNft()
+		return listNftChain(m.ensureNft())
 	case BackendIptables:
 		return listIptables()
 	default:
@@ -258,34 +468,41 @@ func listUFW() []OpenPort {
 	return res
 }
 
-func listNft() []OpenPort {
-	out, err := exec.Command("nft", "list", "ruleset").CombinedOutput()
+func listNftChain(ch *nftChain) []OpenPort {
+	if ch == nil {
+		return nil
+	}
+	out, err := exec.Command("nft", "list", "chain", ch.Family, ch.Table, ch.Chain).CombinedOutput()
 	if err != nil {
 		return nil
 	}
 	seen := map[string]OpenPort{}
+	add := func(proto string, port int) {
+		if port <= 0 {
+			return
+		}
+		k := fmt.Sprintf("%s/%d", proto, port)
+		seen[k] = OpenPort{Port: port, Proto: proto}
+	}
 	for _, line := range strings.Split(string(out), "\n") {
 		line = strings.TrimSpace(line)
-		proto := ""
-		if strings.Contains(line, "tcp dport") {
-			proto = "tcp"
-		} else if strings.Contains(line, "udp dport") {
-			proto = "udp"
-		} else {
-			continue
-		}
 		if !strings.Contains(line, "accept") {
 			continue
 		}
-		fields := strings.Fields(line)
-		for i, f := range fields {
-			if f == "dport" && i+1 < len(fields) {
-				p, err := strconv.Atoi(fields[i+1])
-				if err == nil && p > 0 {
-					k := fmt.Sprintf("%s/%d", proto, p)
-					seen[k] = OpenPort{Port: p, Proto: proto}
+		if m := reNftSet.FindStringSubmatch(line); m != nil {
+			proto := m[1]
+			for _, part := range strings.Split(m[2], ",") {
+				part = strings.TrimSpace(part)
+				p, err := strconv.Atoi(part)
+				if err == nil {
+					add(proto, p)
 				}
 			}
+			continue
+		}
+		if m := reNftDport.FindStringSubmatch(line); m != nil {
+			p, _ := strconv.Atoi(m[2])
+			add(m[1], p)
 		}
 	}
 	res := make([]OpenPort, 0, len(seen))
@@ -342,7 +559,6 @@ func listIptables() []OpenPort {
 
 func parsePortProto(s string) (port int, proto string, ok bool) {
 	s = strings.TrimSpace(s)
-	// 50123/tcp or 50123/tcp (v6)
 	s = strings.Split(s, " ")[0]
 	parts := strings.Split(s, "/")
 	if len(parts) != 2 {
@@ -373,6 +589,29 @@ func (m *Manager) IsOpen(port int, proto string) bool {
 		}
 	}
 	return true
+}
+
+// persist writes the live nftables ruleset back to /etc/nftables.conf when it
+// already looks like a full ruleset file (avoid clobbering include-only configs).
+func (m *Manager) persist() error {
+	if m.Backend != BackendNftables {
+		return nil
+	}
+	path := "/etc/nftables.conf"
+	prev, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	ps := string(prev)
+	if !strings.Contains(ps, "flush ruleset") && !strings.Contains(ps, "table inet filter") && !strings.Contains(ps, "table ip filter") {
+		return nil
+	}
+	out, err := exec.Command("nft", "list", "ruleset").CombinedOutput()
+	if err != nil {
+		return err
+	}
+	body := "#!/usr/sbin/nft -f\nflush ruleset\n" + string(out)
+	return os.WriteFile(path, []byte(body), 0644)
 }
 
 func run(name string, args ...string) error {

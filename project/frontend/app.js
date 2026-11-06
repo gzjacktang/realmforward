@@ -255,7 +255,7 @@ async function renderPorts(el, page) {
   const fwActive = !!data.fw_active;
   el.innerHTML = `
     <div class="page-head"><div><h2>防火墙端口</h2>
-      <p class="sub">三层状态 · 后端 ${data.backend}${fwActive ? " · 已启用默认拒绝" : " · 未加固"} · 共 ${total} 条 · 每页 ${pageSize}</p></div>
+      <p class="sub">三层状态 · 后端 ${data.backend}${data.nft_chain ? " · " + data.nft_chain : ""}${fwActive ? " · 已启用默认拒绝" : " · 未加固"} · 共 ${total} 条 · 每页 ${pageSize}</p></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn btn-ghost" id="btn-harden-fw">一键开启防火墙</button>
         <button class="btn btn-primary" id="btn-open-port">打开端口</button>

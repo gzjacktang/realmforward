@@ -462,13 +462,17 @@ func (s *Server) handlePorts(w http.ResponseWriter, r *http.Request) {
 		}
 		return out[i].Port < out[j].Port
 	})
-	writeJSON(w, map[string]any{
-		"backend":     s.FW.Backend,
-		"ports":       out,
-		"ssh_port":    s.SSHPort,
-		"page_size":   20,
-		"fw_active":   s.FW.Active(),
-	})
+	resp := map[string]any{
+		"backend":   s.FW.Backend,
+		"ports":     out,
+		"ssh_port":  s.SSHPort,
+		"page_size": 20,
+		"fw_active": s.FW.Active(),
+	}
+	if s.FW.Backend == firewall.BackendNftables {
+		resp["nft_chain"] = s.FW.NftChain()
+	}
+	writeJSON(w, resp)
 }
 
 // handlePortsHarden enables default-deny firewall and closes ports with no
@@ -533,6 +537,10 @@ func (s *Server) handlePortsHarden(w http.ResponseWriter, r *http.Request) {
 		_ = s.FW.Close(op.Port, op.Proto)
 		closed = append(closed, fmt.Sprintf("%d/%s", op.Port, op.Proto))
 	}
+	// Re-open keep immediately: closing a nft set rule may have removed kept ports too.
+	for k := range keep {
+		_ = s.FW.Open(k.port, k.proto)
+	}
 
 	if err := s.FW.EnsureBaseRules(); err != nil {
 		writeErr(w, 500, "基础规则失败: "+err.Error())
@@ -542,7 +550,7 @@ func (s *Server) handlePortsHarden(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, "开启防火墙失败: "+err.Error())
 		return
 	}
-	// Re-open after ufw enable / nft flush (EnableDenyIncoming may reset rules).
+	// Re-open after policy recreate / ufw enable.
 	for k := range keep {
 		_ = s.FW.Open(k.port, k.proto)
 	}
@@ -550,15 +558,22 @@ func (s *Server) handlePortsHarden(w http.ResponseWriter, r *http.Request) {
 
 	sort.Strings(opened)
 	sort.Strings(closed)
-	_ = s.Store.AddAudit("web", "admin", "ports.harden", "ok",
-		fmt.Sprintf("backend=%s kept=%d closed=%d", s.FW.Backend, len(keep), len(closed)))
-	writeJSON(w, map[string]any{
+	audit := fmt.Sprintf("backend=%s kept=%d closed=%d", s.FW.Backend, len(keep), len(closed))
+	if s.FW.Backend == firewall.BackendNftables {
+		audit += " chain=" + s.FW.NftChain()
+	}
+	_ = s.Store.AddAudit("web", "admin", "ports.harden", "ok", audit)
+	resp := map[string]any{
 		"ok":        true,
 		"backend":   s.FW.Backend,
 		"fw_active": s.FW.Active(),
 		"kept":      opened,
 		"closed":    closed,
-	})
+	}
+	if s.FW.Backend == firewall.BackendNftables {
+		resp["nft_chain"] = s.FW.NftChain()
+	}
+	writeJSON(w, resp)
 }
 
 func (s *Server) handlePortOpen(w http.ResponseWriter, r *http.Request) {
