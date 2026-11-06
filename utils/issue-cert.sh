@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Issue or renew TLS cert for XDP Forward Panel.
-# Modes: letsencrypt (default when domain given) | selfsigned
+# Modes: letsencrypt | zerossl | selfsigned | prompt
 set -euo pipefail
 
 DATA="${DATA:-/var/lib/xdp-forward-panel}"
 CFG="$DATA/config.json"
-MODE="${1:-}"          # letsencrypt | selfsigned | ""
+MODE="${1:-}"          # letsencrypt | zerossl | selfsigned | ""
 DOMAIN="${2:-}"
 EMAIL="${3:-}"
 
@@ -111,25 +111,89 @@ HOOK
   echo "Let's Encrypt 证书就绪: $live/fullchain.pem"
 }
 
+ensure_acme_sh() {
+  if [[ -x "$HOME/.acme.sh/acme.sh" ]]; then
+    return 0
+  fi
+  if [[ -x /root/.acme.sh/acme.sh ]]; then
+    return 0
+  fi
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update -y >/dev/null
+  apt-get install -y curl cron socat >/dev/null
+  local mail="${1:-admin@localhost}"
+  curl -fsSL https://get.acme.sh | sh -s email="$mail"
+}
+
+acme_bin() {
+  if [[ -x /root/.acme.sh/acme.sh ]]; then
+    echo /root/.acme.sh/acme.sh
+  else
+    echo "$HOME/.acme.sh/acme.sh"
+  fi
+}
+
+issue_zerossl() {
+  local domain="$1" email="$2"
+  [[ -n "$domain" ]] || { echo "ZeroSSL 需要域名" >&2; exit 1; }
+  [[ -n "$email" ]] || { echo "ZeroSSL 需要邮箱（用于账号注册）" >&2; exit 1; }
+
+  if ss -lnt | grep -q ':80 '; then
+    echo "错误: 80 端口被占用，无法用 standalone 申请证书。" >&2
+    exit 1
+  fi
+  ufw allow 80/tcp >/dev/null 2>&1 || true
+
+  ensure_acme_sh "$email"
+  local ACME
+  ACME="$(acme_bin)"
+
+  echo "正在向 ZeroSSL 申请证书: $domain …"
+  "$ACME" --set-default-ca --server zerossl >/dev/null
+  "$ACME" --register-account -m "$email" >/dev/null 2>&1 || true
+  "$ACME" --issue --standalone -d "$domain" --keylength ec-256 --force
+
+  local certdir="$DATA/tls"
+  mkdir -p "$certdir"
+  local cert="$certdir/fullchain.pem" key="$certdir/key.pem"
+  "$ACME" --install-cert -d "$domain" --ecc \
+    --fullchain-file "$cert" \
+    --key-file "$key" \
+    --reloadcmd "systemctl try-reload-or-restart xdp-forward-panel.service 2>/dev/null || systemctl restart xdp-forward-panel.service 2>/dev/null || true"
+
+  chmod 600 "$key"
+  write_cfg "zerossl" "$domain" "$email" "$cert" "$key"
+  echo "ZeroSSL 证书就绪: $cert"
+}
+
 prompt_and_issue() {
   echo
   echo "======== TLS 证书设置 ========"
   echo "1) Let's Encrypt 免费证书（推荐，需公网域名且 80 端口可达）"
-  echo "2) 自签证书（浏览器会提示不受信任）"
+  echo "2) ZeroSSL 免费证书（需域名 + 邮箱，80 端口可达）"
+  echo "3) 自签证书（浏览器会提示不受信任）"
   local choice
-  read -r -p "请选择 [1/2] (默认 1): " choice
+  read -r -p "请选择 [1/2/3] (默认 1): " choice
   choice="${choice:-1}"
 
   local domain email
-  if [[ "$choice" == "1" ]]; then
-    read -r -p "域名 (例如 fxhk.jllexs.top): " domain
-    read -r -p "邮箱 (可留空): " email
-    issue_letsencrypt "$domain" "$email"
-  else
-    read -r -p "域名或主机名 (可留空，默认 localhost): " domain
-    domain="${domain:-localhost}"
-    issue_selfsigned "$domain"
-  fi
+  case "$choice" in
+    1)
+      read -r -p "域名 (例如 fxhk.jllexs.top): " domain
+      read -r -p "邮箱 (可留空): " email
+      issue_letsencrypt "$domain" "$email"
+      ;;
+    2)
+      read -r -p "域名 (例如 fxhk.jllexs.top): " domain
+      read -r -p "邮箱 (必填): " email
+      issue_zerossl "$domain" "$email"
+      ;;
+    *)
+      read -r -p "域名或主机名 (可留空，默认 localhost): " domain
+      domain="${domain:-localhost}"
+      issue_selfsigned "$domain"
+      ;;
+  esac
 }
 
 need_root
@@ -141,6 +205,11 @@ case "$MODE" in
     EMAIL="${EMAIL:-$(read_cfg | sed -n '3p')}"
     issue_letsencrypt "$DOMAIN" "$EMAIL"
     ;;
+  zerossl|zero)
+    DOMAIN="${DOMAIN:-$(read_cfg | sed -n '1p')}"
+    EMAIL="${EMAIL:-$(read_cfg | sed -n '3p')}"
+    issue_zerossl "$DOMAIN" "$EMAIL"
+    ;;
   selfsigned|self)
     DOMAIN="${DOMAIN:-$(read_cfg | sed -n '1p')}"
     DOMAIN="${DOMAIN:-localhost}"
@@ -150,7 +219,7 @@ case "$MODE" in
     prompt_and_issue
     ;;
   *)
-    echo "用法: $0 [letsencrypt|selfsigned|prompt] [domain] [email]" >&2
+    echo "用法: $0 [letsencrypt|zerossl|selfsigned|prompt] [domain] [email]" >&2
     exit 1
     ;;
 esac

@@ -14,7 +14,7 @@ type Config struct {
 	DataDir      string  `json:"data_dir"`
 	Iface        string  `json:"iface"`
 	PublicHost  string `json:"public_host"` // domain or IP for TLS SAN / hints
-	TLSMode     string `json:"tls_mode"`    // selfsigned | letsencrypt
+	TLSMode     string `json:"tls_mode"`    // selfsigned | letsencrypt | zerossl
 	ACMEEmail   string `json:"acme_email"`
 	SNATPortMin uint16 `json:"snat_port_min"`
 	SNATPortMax uint16 `json:"snat_port_max"`

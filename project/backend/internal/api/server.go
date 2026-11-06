@@ -706,8 +706,9 @@ func (s *Server) handleTLSRegen(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg := s.Cfg.Get()
-	if strings.EqualFold(cfg.TLSMode, "letsencrypt") || strings.EqualFold(cfg.TLSMode, "le") {
-		writeErr(w, 400, "当前为 Let's Encrypt，请用「安装证书」或服务器执行: xdp cert")
+	if strings.EqualFold(cfg.TLSMode, "letsencrypt") || strings.EqualFold(cfg.TLSMode, "le") ||
+		strings.EqualFold(cfg.TLSMode, "zerossl") || strings.EqualFold(cfg.TLSMode, "zero") {
+		writeErr(w, 400, "当前为公共 CA 证书，请用「安装证书」或服务器执行: xdp cert")
 		return
 	}
 	// only regenerate local self-signed files under data dir
@@ -732,7 +733,7 @@ func (s *Server) handleTLSIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Mode   string `json:"mode"` // selfsigned | letsencrypt
+		Mode   string `json:"mode"` // selfsigned | letsencrypt | zerossl
 		Domain string `json:"domain"`
 		Email  string `json:"email"`
 	}
@@ -747,6 +748,10 @@ func (s *Server) handleTLSIssue(w http.ResponseWriter, r *http.Request) {
 	domain := strings.TrimSpace(body.Domain)
 	if domain == "" {
 		domain = s.Cfg.Get().PublicHost
+	}
+	if (mode == "zerossl" || mode == "zero") && strings.TrimSpace(body.Email) == "" {
+		writeErr(w, 400, "ZeroSSL 需要填写邮箱")
+		return
 	}
 	script := "/usr/local/sbin/xdp-panel-issue-cert"
 	if _, err := os.Stat(script); err != nil {

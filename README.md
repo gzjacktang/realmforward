@@ -34,7 +34,7 @@ xdp uninstall
 | SNAT 段 | 默认 `40000-49999`（写入 `ip_local_reserved_ports`，不开放防火墙） |
 | 防火墙 | ufw / nft / iptables 检测与放行 |
 | Web 设置 | 更新、卸载、改用户名密码、安装证书、重启 |
-| TLS | 自签 或 Let's Encrypt（`xdp cert` / 面板「安装证书」） |
+| TLS | 自签 / Let's Encrypt / ZeroSSL（`xdp cert` / 面板「安装证书」） |
 
 ## 目录
 

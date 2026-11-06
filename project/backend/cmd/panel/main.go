@@ -106,14 +106,14 @@ func main() {
 		tlsHosts = append(tlsHosts, cfg.PublicHost)
 	}
 	switch strings.ToLower(cfg.TLSMode) {
-	case "letsencrypt", "le":
+	case "letsencrypt", "le", "zerossl", "zero":
 		if _, err := os.Stat(cfg.TLSCertFile); err != nil {
-			log.Fatalf("Let's Encrypt 证书不存在: %s （请运行: xdp-panel-issue-cert letsencrypt %s）", cfg.TLSCertFile, cfg.PublicHost)
+			log.Fatalf("证书不存在: %s （请运行: xdp cert）", cfg.TLSCertFile)
 		}
 		if _, err := os.Stat(cfg.TLSKeyFile); err != nil {
-			log.Fatalf("Let's Encrypt 私钥不存在: %s", cfg.TLSKeyFile)
+			log.Fatalf("私钥不存在: %s", cfg.TLSKeyFile)
 		}
-		log.Printf("TLS mode=letsencrypt cert=%s", cfg.TLSCertFile)
+		log.Printf("TLS mode=%s cert=%s", cfg.TLSMode, cfg.TLSCertFile)
 	default:
 		if err := tlsutil.Ensure(cfg.TLSCertFile, cfg.TLSKeyFile, tlsHosts); err != nil {
 			log.Fatal("tls:", err)

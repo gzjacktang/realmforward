@@ -441,8 +441,9 @@ async function renderSettings(el) {
         <div class="field"><label>ACME 邮箱（LE）</label><input id="tls-email" class="mono" value="${s.acme_email || ""}" /></div>
         <div class="field"><label>模式</label>
           <select id="tls-mode">
-            <option value="selfsigned" ${s.tls_mode === "letsencrypt" || s.tls_mode === "le" ? "" : "selected"}>自签</option>
+            <option value="selfsigned" ${!["letsencrypt","le","zerossl","zero"].includes(s.tls_mode) ? "selected" : ""}>自签</option>
             <option value="letsencrypt" ${s.tls_mode === "letsencrypt" || s.tls_mode === "le" ? "selected" : ""}>Let's Encrypt</option>
+            <option value="zerossl" ${s.tls_mode === "zerossl" || s.tls_mode === "zero" ? "selected" : ""}>ZeroSSL</option>
           </select></div>
       </div>
       <div style="display:flex;flex-wrap:wrap;gap:8px">
@@ -522,11 +523,15 @@ async function renderSettings(el) {
   document.getElementById("tls-issue").onclick = async () => {
     const mode = document.getElementById("tls-mode").value;
     const domain = document.getElementById("tls-domain").value.trim();
-    if (mode === "letsencrypt" && !domain) {
-      toast("Let's Encrypt 需要域名");
+    if ((mode === "letsencrypt" || mode === "zerossl") && !domain) {
+      toast("公共 CA 需要域名");
       return;
     }
-    if (!confirm("确认申请/更换证书？（LE 需占用 80 端口）")) return;
+    if (mode === "zerossl" && !document.getElementById("tls-email").value.trim()) {
+      toast("ZeroSSL 需要填写邮箱");
+      return;
+    }
+    if (!confirm("确认申请/更换证书？（公共 CA 需占用 80 端口）")) return;
     try {
       await api("/settings/tls/issue", {
         method: "POST",
