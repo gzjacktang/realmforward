@@ -56,6 +56,7 @@ install -m 0644 "$PKG_ROOT/lib/xdp_forward.o" "$LIBDIR/xdp_forward.o"
 install -m 0644 "$PKG_ROOT/web/"* "$SHARE/web/"
 install -m 0755 "$PKG_ROOT/utils/issue-cert.sh" /usr/local/sbin/xdp-panel-issue-cert
 install -m 0755 "$PKG_ROOT/utils/auto-update.sh" /usr/local/sbin/xdp-panel-auto-update
+install -m 0755 "$PKG_ROOT/utils/do-update.sh" /usr/local/sbin/xdp-panel-do-update
 install -m 0644 "$PKG_ROOT/utils/xdp-forward-panel.service" /etc/systemd/system/xdp-forward-panel.service
 
 # 缓存包目录，便于排查

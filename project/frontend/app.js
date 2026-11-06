@@ -37,6 +37,82 @@ function toast(msg) {
   window.__tt = setTimeout(() => t.classList.remove("show"), 2200);
 }
 
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  })[c]);
+}
+
+function renderUpdateStatusHTML(st) {
+  st = st || {};
+  const state = st.state || "idle";
+  if (state === "idle") {
+    return `<p class="hint" style="margin:0">尚未执行过面板更新。点「检查并更新」后可在此查看进度。</p>`;
+  }
+  const label = {
+    running: "更新进行中…",
+    ok: "上次更新成功",
+    fail: "上次更新失败",
+  }[state] || state;
+  const cls = { running: "tag-info", ok: "tag-ok", fail: "tag-danger" }[state] || "tag-info";
+  const from = st.from_version ? `v${esc(st.from_version)}` : "?";
+  const to = st.to_version ? `v${esc(st.to_version)}` : (st.want_tag ? esc(st.want_tag) : "latest");
+  const when = esc(st.finished_at || st.started_at || "");
+  const err = st.error ? `<div class="hint" style="color:var(--danger);margin-top:6px">${esc(st.error)}</div>` : "";
+  return `<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+    <span class="tag ${cls}">${label}</span>
+    <span class="mono" style="font-size:0.8rem">${from} → ${to}</span>
+    ${when ? `<span class="hint" style="margin:0">${when}</span>` : ""}
+  </div>${err}`;
+}
+
+let __updPoll = null;
+function stopUpdatePoll() {
+  if (__updPoll) { clearInterval(__updPoll); __updPoll = null; }
+}
+
+async function refreshUpdateStatusUI() {
+  const box = document.getElementById("upd-status");
+  const logEl = document.getElementById("upd-log");
+  const latestEl = document.getElementById("latest-ver");
+  if (!box) return null;
+  const st = await api("/settings/update/status");
+  box.innerHTML = renderUpdateStatusHTML(st.status);
+  if (latestEl && st.latest_version) {
+    latestEl.innerHTML = esc(st.latest_version) +
+      (st.latest_version.replace(/^v/, "") !== String(st.panel_version || "").replace(/^v/, "")
+        ? ' <span class="badge-new">可更新</span>' : "");
+  }
+  if (logEl) {
+    const tail = (st.log_tail || "").trim();
+    if (tail) {
+      logEl.hidden = false;
+      logEl.textContent = tail;
+    }
+  }
+  return st;
+}
+
+function startUpdatePoll() {
+  stopUpdatePoll();
+  let n = 0;
+  __updPoll = setInterval(async () => {
+    n += 1;
+    try {
+      const st = await refreshUpdateStatusUI();
+      const state = st?.status?.state;
+      if (state === "ok") {
+        stopUpdatePoll();
+        toast("更新完成，即将刷新页面…");
+        setTimeout(() => location.reload(), 1500);
+      } else if (state === "fail" || n > 90) {
+        stopUpdatePoll();
+        if (state === "fail") toast("更新失败，请查看下方日志");
+      }
+    } catch (_) { /* panel may be restarting */ }
+  }, 2000);
+}
+
 function showApp(on) {
   document.getElementById("view-login").classList.toggle("active", !on);
   document.getElementById("view-app").classList.toggle("active", on);
@@ -430,16 +506,20 @@ async function renderSettings(el) {
     <div class="page-head"><div><h2>面板设置</h2><p class="sub">更新 · 证书 · 账号 · 卸载 · VPS 命令 <span class="mono">xdp</span></p></div></div>
     <div class="grid grid-2">
       <div class="panel"><div class="panel-h"><h3>版本与更新</h3></div><div class="form-box">
-        <div class="ver-row"><div><div class="name">面板</div><div class="ver">v${s.panel_version}</div></div></div>
-        <div class="ver-row"><div><div class="name">转发内核 BPF</div><div class="ver">v${s.bpf_version} · ${s.xdp?.loaded ? s.xdp.mode : "未加载"}</div></div>
+        <div class="ver-row"><div><div class="name">当前面板</div><div class="ver">v${esc(s.panel_version || s.installed_version || "?")}</div></div></div>
+        <div class="ver-row"><div><div class="name">GitHub 最新</div><div class="ver" id="latest-ver">${s.latest_version ? esc(s.latest_version) : (s.latest_error ? "查询失败" : "…")}${s.update_available ? ' <span class="badge-new">可更新</span>' : ""}</div></div></div>
+        <div class="ver-row"><div><div class="name">转发内核 BPF</div><div class="ver">v${esc(s.bpf_version)} · ${s.xdp?.loaded ? esc(s.xdp.mode) : "未加载"}</div></div></div>
+        <div id="upd-status" class="upd-status">${renderUpdateStatusHTML(s.update_status)}</div>
+        <pre id="upd-log" class="upd-log mono" hidden></pre>
         <div class="field"><label>自动更新</label>
           <button type="button" class="toggle ${s.auto_update ? "on" : ""}" id="au"></button></div>
-        <div class="field"><label>更新地址</label><input id="upd" class="mono" value="${s.update_url || "https://github.com/gzjacktang/xdpforward/releases/latest"}" /></div>
+        <div class="field"><label>更新地址</label><input id="upd" class="mono" value="${esc(s.update_url || "https://github.com/gzjacktang/xdpforward/releases/latest")}" /></div>
         <div style="display:flex;flex-wrap:wrap;gap:8px">
-          <button class="btn btn-primary" id="do-update">立即更新</button>
+          <button class="btn btn-primary" id="do-update">${s.update_available ? "立即更新到最新" : "检查并更新"}</button>
+          <button class="btn btn-ghost" id="refresh-upd">刷新状态</button>
           <button class="btn btn-warn" id="restart">重启面板</button>
         </div>
-        <p class="hint">也可在 VPS 执行 <span class="mono">xdp update</span></p>
+        <p class="hint">更新在独立任务中执行，不会被面板重启中断。也可在 VPS 执行 <span class="mono">xdp update</span></p>
       </div></div>
       <div class="panel"><div class="panel-h"><h3>访问</h3></div><div class="form-box">
         <div class="field"><label>端口</label><input id="lp" class="mono" value="${s.listen_port}" /></div>
@@ -527,15 +607,26 @@ async function renderSettings(el) {
       toast("重启失败: " + ex.message);
     }
   };
+  document.getElementById("refresh-upd").onclick = async () => {
+    try {
+      await refreshUpdateStatusUI();
+      toast("状态已刷新");
+    } catch (ex) {
+      toast("刷新失败: " + ex.message);
+    }
+  };
+  if (s.update_status?.state === "running") startUpdatePoll();
   document.getElementById("do-update").onclick = async () => {
-    if (!confirm("从 GitHub 拉取并更新？服务会短暂中断。")) return;
+    if (!confirm("从 GitHub 拉取并更新？服务会短暂中断，可在本页查看进度。")) return;
     try {
       await api("/settings", {
         method: "POST",
         body: JSON.stringify({ update_url: document.getElementById("upd").value }),
       });
-      await api("/settings/update", { method: "POST" });
-      toast("已开始更新，约 1–3 分钟后刷新页面");
+      const res = await api("/settings/update", { method: "POST" });
+      toast(res.note || "已开始更新");
+      document.getElementById("upd-status").innerHTML = renderUpdateStatusHTML({ state: "running", from_version: s.panel_version, want_tag: "latest" });
+      startUpdatePoll();
     } catch (ex) {
       toast("更新失败: " + ex.message);
     }

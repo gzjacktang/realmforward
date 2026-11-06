@@ -306,6 +306,20 @@
     .ver-row:last-child { border-bottom: none; }
     .ver-row .name { font-weight: 650; }
     .ver-row .ver { font-family: var(--mono); font-size: 0.82rem; color: var(--ink-soft); }
+    .badge-new {
+      display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px;
+      font-size: 0.72rem; font-family: var(--sans, inherit); font-weight: 650;
+      background: var(--accent-soft); color: var(--accent-2); vertical-align: middle;
+    }
+    .upd-status {
+      margin: 10px 0 4px; padding: 10px 12px; border-radius: 10px;
+      background: rgba(15, 35, 55, 0.04); border: 1px solid var(--line);
+    }
+    .upd-log {
+      margin: 8px 0 0; max-height: 160px; overflow: auto; padding: 10px 12px;
+      font-size: 0.72rem; line-height: 1.45; white-space: pre-wrap; word-break: break-all;
+      background: #0f1720; color: #d7e2ec; border-radius: 10px;
+    }
 
     .stack-status { display: flex; flex-wrap: wrap; gap: 6px; }
     .toggle {

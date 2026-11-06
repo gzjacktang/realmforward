@@ -21,16 +21,22 @@ import (
 	"github.com/wuling/xdp-forward-panel/internal/store"
 	"github.com/wuling/xdp-forward-panel/internal/tgbot"
 	"github.com/wuling/xdp-forward-panel/internal/tlsutil"
+	"github.com/wuling/xdp-forward-panel/internal/version"
 	"github.com/wuling/xdp-forward-panel/internal/xdp"
 )
 
 func main() {
+	showVersion := flag.Bool("version", false, "print version and exit")
 	dataDir := flag.String("data", "/var/lib/xdp-forward-panel", "data directory")
 	iface := flag.String("iface", "", "network interface for XDP (default: auto)")
 	bpfObj := flag.String("bpf", "", "path to xdp_forward.o")
 	webDir := flag.String("web", "", "static web directory")
 	noXDP := flag.Bool("no-xdp", false, "skip XDP load (API-only mode)")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println(version.Version)
+		return
+	}
 
 	if err := os.MkdirAll(*dataDir, 0o755); err != nil {
 		log.Fatal(err)

@@ -70,6 +70,7 @@ install -m 0644 "$REPO_ROOT/project/frontend/"* "$SHARE/web/"
 install -m 0755 "$REPO_ROOT/utils/xdp" /usr/local/bin/xdp
 install -m 0755 "$REPO_ROOT/utils/issue-cert.sh" /usr/local/sbin/xdp-panel-issue-cert
 install -m 0755 "$REPO_ROOT/utils/auto-update.sh" /usr/local/sbin/xdp-panel-auto-update
+install -m 0755 "$REPO_ROOT/utils/do-update.sh" /usr/local/sbin/xdp-panel-do-update
 mkdir -p /opt/xdp-forward-panel
 if [[ "$REPO_ROOT" != /opt/xdp-forward-panel ]]; then
   rsync -a --delete \

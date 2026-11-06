@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -65,6 +67,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc(api("/settings/tls/issue"), s.requireAuth(s.handleTLSIssue))
 	mux.HandleFunc(api("/settings/restart"), s.requireAuth(s.handleRestart))
 	mux.HandleFunc(api("/settings/update"), s.requireAuth(s.handleUpdate))
+	mux.HandleFunc(api("/settings/update/status"), s.requireAuth(s.handleUpdateStatus))
 	mux.HandleFunc(api("/settings/uninstall"), s.requireAuth(s.handleUninstall))
 
 	// static under base path
@@ -680,24 +683,31 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		tlsInfo, _ := tlsutil.Info(cfg.TLSCertFile)
 		username, _, _ := s.Store.GetUser()
+		latest, latestErr := fetchLatestReleaseTag()
+		upd := readUpdateStatus(cfg.DataDir)
 		writeJSON(w, map[string]any{
-			"listen_addr":   cfg.ListenAddr,
-			"listen_port":   cfg.ListenPort,
-			"base_path":     cfg.BasePath,
-			"iface":         cfg.Iface,
-			"public_host":   cfg.PublicHost,
-			"tls_mode":      cfg.TLSMode,
-			"acme_email":    cfg.ACMEEmail,
-			"snat_min":      cfg.SNATPortMin,
-			"snat_max":      cfg.SNATPortMax,
-			"update_url":    cfg.UpdateURL,
-			"auto_update":   cfg.AutoUpdate,
-			"panel_version": cfg.PanelVersion,
-			"bpf_version":   cfg.BPFVersion,
-			"tls":           tlsInfo,
-			"tls_cert_file": cfg.TLSCertFile,
-			"username":      username,
-			"xdp":           s.XDP.Status(),
+			"listen_addr":     cfg.ListenAddr,
+			"listen_port":     cfg.ListenPort,
+			"base_path":       cfg.BasePath,
+			"iface":           cfg.Iface,
+			"public_host":     cfg.PublicHost,
+			"tls_mode":        cfg.TLSMode,
+			"acme_email":      cfg.ACMEEmail,
+			"snat_min":        cfg.SNATPortMin,
+			"snat_max":        cfg.SNATPortMax,
+			"update_url":      cfg.UpdateURL,
+			"auto_update":     cfg.AutoUpdate,
+			"panel_version":   cfg.PanelVersion,
+			"bpf_version":     cfg.BPFVersion,
+			"installed_version": readInstalledVersion(),
+			"latest_version":  latest,
+			"update_available": latest != "" && normalizeVer(latest) != normalizeVer(cfg.PanelVersion),
+			"latest_error":    latestErr,
+			"update_status":   upd,
+			"tls":             tlsInfo,
+			"tls_cert_file":   cfg.TLSCertFile,
+			"username":        username,
+			"xdp":             s.XDP.Status(),
 		})
 	case http.MethodPost:
 		var body map[string]any
@@ -881,19 +891,155 @@ func (s *Server) handleTLSIssue(w http.ResponseWriter, r *http.Request) {
 	}()
 }
 
+func (s *Server) handleUpdateStatus(w http.ResponseWriter, r *http.Request) {
+	cfg := s.Cfg.Get()
+	st := readUpdateStatus(cfg.DataDir)
+	latest, _ := fetchLatestReleaseTag()
+	writeJSON(w, map[string]any{
+		"status":            st,
+		"panel_version":     cfg.PanelVersion,
+		"installed_version": readInstalledVersion(),
+		"latest_version":    latest,
+		"log_tail":          readUpdateLogTail(cfg.DataDir, 40),
+	})
+}
+
 func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeErr(w, 405, "method")
 		return
 	}
-	_ = s.Store.AddAudit("web", "admin", "panel.update", "ok", "")
-	writeJSON(w, map[string]any{"ok": true, "note": "已开始后台更新，完成后服务会重启"})
-	go func() {
-		time.Sleep(500 * time.Millisecond)
-		cmd := exec.Command("/usr/local/bin/xdp", "update")
-		cmd.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
-		_ = cmd.Run()
-	}()
+	var body struct {
+		Tag string `json:"tag"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+
+	cfg := s.Cfg.Get()
+	st := readUpdateStatus(cfg.DataDir)
+	if s, _ := st["state"].(string); s == "running" {
+		writeErr(w, 409, "更新正在进行中，请稍候刷新查看状态")
+		return
+	}
+
+	helper := "/usr/local/sbin/xdp-panel-do-update"
+	if _, err := os.Stat(helper); err != nil {
+		// fallback: still avoid cgroup kill via systemd-run + xdp
+		helper = "/usr/local/bin/xdp"
+	}
+
+	_ = s.Store.AddAudit("web", "admin", "panel.update", "ok", body.Tag)
+	// Start outside the panel cgroup — otherwise systemctl restart kills the updater.
+	_ = exec.Command("systemctl", "reset-failed", "xdp-panel-manual-update.service").Run()
+	args := []string{"--unit=xdp-panel-manual-update", "--collect", "--no-block", helper}
+	if helper == "/usr/local/sbin/xdp-panel-do-update" {
+		if body.Tag != "" {
+			args = append(args, body.Tag)
+		}
+	} else {
+		args = append(args, "update")
+		if body.Tag != "" {
+			args = append(args, body.Tag)
+		}
+	}
+	cmd := exec.Command("systemd-run", args...)
+	cmd.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		// last-resort: nohup detached (also outside panel restart cgroup kill if already forked)
+		script := helper
+		if helper == "/usr/local/bin/xdp" {
+			script = helper + " update " + shellQuote(body.Tag)
+		} else if body.Tag != "" {
+			script = helper + " " + shellQuote(body.Tag)
+		}
+		nohup := exec.Command("bash", "-c", "nohup "+script+" >>/var/lib/xdp-forward-panel/update.log 2>&1 &")
+		_ = nohup.Start()
+		writeJSON(w, map[string]any{
+			"ok":      true,
+			"note":    "已后台启动更新（nohup 回退）",
+			"detail":  strings.TrimSpace(string(out)) + "; " + err.Error(),
+			"started": true,
+		})
+		return
+	}
+	writeJSON(w, map[string]any{
+		"ok":      true,
+		"note":    "已启动独立更新任务，完成后服务会自动重启；请关注下方状态",
+		"detail":  strings.TrimSpace(string(out)),
+		"started": true,
+	})
+}
+
+func shellQuote(s string) string {
+	if s == "" {
+		return ""
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+func normalizeVer(v string) string {
+	v = strings.TrimSpace(v)
+	return strings.TrimPrefix(v, "v")
+}
+
+func readInstalledVersion() string {
+	b, err := os.ReadFile("/opt/xdp-forward-panel/VERSION")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}
+
+func fetchLatestReleaseTag() (string, string) {
+	client := &http.Client{Timeout: 8 * time.Second}
+	req, err := http.NewRequest(http.MethodGet, "https://api.github.com/repos/gzjacktang/xdpforward/releases/latest", nil)
+	if err != nil {
+		return "", err.Error()
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("User-Agent", "xdp-forward-panel")
+	res, err := client.Do(req)
+	if err != nil {
+		return "", err.Error()
+	}
+	defer res.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	if res.StatusCode >= 300 {
+		return "", fmt.Sprintf("github HTTP %d", res.StatusCode)
+	}
+	var obj struct {
+		TagName string `json:"tag_name"`
+	}
+	if err := json.Unmarshal(body, &obj); err != nil {
+		return "", err.Error()
+	}
+	return obj.TagName, ""
+}
+
+func readUpdateStatus(dataDir string) map[string]any {
+	path := filepath.Join(dataDir, "update-status.json")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return map[string]any{"state": "idle"}
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		return map[string]any{"state": "idle"}
+	}
+	return m
+}
+
+func readUpdateLogTail(dataDir string, n int) string {
+	path := filepath.Join(dataDir, "update.log")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(string(b), "\n")
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (s *Server) handleUninstall(w http.ResponseWriter, r *http.Request) {

@@ -48,6 +48,7 @@ install -m 0644 "$ROOT/project/frontend/"* "$OUT_DIR/web/"
 install -m 0755 "$ROOT/utils/install-release.sh" "$OUT_DIR/utils/install-release.sh"
 install -m 0755 "$ROOT/utils/issue-cert.sh" "$OUT_DIR/utils/issue-cert.sh"
 install -m 0755 "$ROOT/utils/auto-update.sh" "$OUT_DIR/utils/auto-update.sh"
+install -m 0755 "$ROOT/utils/do-update.sh" "$OUT_DIR/utils/do-update.sh"
 install -m 0644 "$ROOT/utils/xdp-forward-panel.service" "$OUT_DIR/utils/xdp-forward-panel.service"
 
 (
