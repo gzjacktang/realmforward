@@ -437,7 +437,7 @@ async function renderSettings(el) {
     <div class="panel" style="margin-top:14px"><div class="panel-h"><h3>证书</h3></div><div class="form-box">
       <p class="hint">当前: <strong>${s.tls_mode || "selfsigned"}</strong> · ${s.tls || "-"}</p>
       <div class="form-row">
-        <div class="field"><label>域名</label><input id="tls-domain" class="mono" value="${s.public_host || ""}" placeholder="fxhk.example.com" /></div>
+        <div class="field"><label>域名</label><input id="tls-domain" class="mono" value="${s.public_host || ""}" placeholder="panel.example.com" /></div>
         <div class="field"><label>ACME 邮箱（LE）</label><input id="tls-email" class="mono" value="${s.acme_email || ""}" /></div>
         <div class="field"><label>模式</label>
           <select id="tls-mode">

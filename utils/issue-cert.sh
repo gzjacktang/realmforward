@@ -179,12 +179,12 @@ prompt_and_issue() {
   local domain email
   case "$choice" in
     1)
-      read -r -p "域名 (例如 fxhk.jllexs.top): " domain
+      read -r -p "域名: " domain
       read -r -p "邮箱 (可留空): " email
       issue_letsencrypt "$domain" "$email"
       ;;
     2)
-      read -r -p "域名 (例如 fxhk.jllexs.top): " domain
+      read -r -p "域名: " domain
       read -r -p "邮箱 (必填): " email
       issue_zerossl "$domain" "$email"
       ;;
