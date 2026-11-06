@@ -3,7 +3,7 @@
 Debian / Ubuntu 上的 **eBPF/XDP 四层转发面板**：Web 管理、防火墙端口、Telegram 机器人、一键证书。
 
 仓库：<https://github.com/gzjacktang/xdpforward>  
-当前版本：**v0.2.0**
+当前版本：**v0.2.1**
 
 从 v0.2.0 起，安装与更新均使用 **GitHub Actions 预编译包**，VPS **无需安装 Go / clang**，`bash` 一条命令即可拉取安装。
 
