@@ -104,12 +104,13 @@ func (m *Manager) Load(iface string, mode string, snatMin, snatMax uint16) error
 		return err
 	}
 
-	// virtio/KVM: GRO/GSO can leave mangled L4 checksums that break XDP NAT incremental updates
+	// virtio/KVM: GRO/GSO can leave mangled L4 checksums that break XDP NAT.
+	// Do NOT toggle rx-checksumming — on many cloud NICs it is fixed-on, and
+	// requesting "rx off" can put the queue into a worse checksum state for XDP_TX.
 	_ = exec.Command("ethtool", "-K", iface, "gro", "off").Run()
 	_ = exec.Command("ethtool", "-K", iface, "gso", "off").Run()
 	_ = exec.Command("ethtool", "-K", iface, "tso", "off").Run()
 	_ = exec.Command("ethtool", "-K", iface, "rx-gro-hw", "off").Run()
-	_ = exec.Command("ethtool", "-K", iface, "rx", "off").Run()
 
 	usedMode, l, err := attachXDP(prog, ifi.Index, mode)
 	if err != nil {
@@ -247,6 +248,8 @@ func (m *Manager) SyncRules(rules []Rule) error {
 		}
 		for _, pn := range protos {
 			key := ruleKey{Dport: r.LocalPort, Proto: pn}
+			// Numeric big-endian IPv4 (e.g. 143.20.156.31 → 0x8F149C1F).
+			// BPF must bpf_htonl() before writing into the packet on LE hosts.
 			val := ruleVal{
 				RuleID:   r.ID,
 				DestIP:   binary.BigEndian.Uint32(ip4),

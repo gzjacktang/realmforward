@@ -22,13 +22,9 @@
 #define BPF_FIB_LOOKUP_DIRECT (1U << 0)
 #endif
 
-/*
- * bpf_xdp_load_bytes (helper ID 189, Linux ≥ 5.18).
- * Some CI/distro headers expose it as an unresolved extern/kfunc; cilium/ebpf
- * then fails with: unsatisfied program reference "bpf_xdp_load_bytes".
- * Always emit a classic BPF helper call instead.
- */
+/* Pin classic helper ID 189 so CI Ubuntu headers cannot emit unresolved kfunc. */
 static long (*const xfp_xdp_load_bytes)(struct xdp_md *xdp_md, __u32 offset, void *buf, __u32 len) = (void *)189;
+#define bpf_xdp_load_bytes xfp_xdp_load_bytes
 
 #define MAX_RULES 256
 #define MAX_CT    65536
@@ -115,6 +111,18 @@ struct {
 	__type(value, __u8[1504]);
 } scratch SEC(".maps");
 
+/* Fold like kernel csum_fold(). */
+static __always_inline __sum16 csum_fold_helper(__wsum csum)
+{
+	csum = (csum & 0xffff) + (csum >> 16);
+	csum = (csum & 0xffff) + (csum >> 16);
+	return (__sum16)~csum;
+}
+
+/*
+ * RFC1624 incremental update in host-numeric space (ntohs/htons).
+ * Do NOT bpf_csum_diff stack __be32 on LE — spilled bytes are swapped vs wire.
+ */
 static __always_inline void csum_replace4(__sum16 *sum, __be32 from, __be32 to)
 {
 	__u32 sum32 = ~(__u32)bpf_ntohs(*(__be16 *)sum) & 0xffff;
@@ -135,15 +143,7 @@ static __always_inline void csum_replace2(__sum16 *sum, __be16 from, __be16 to)
 	*(__be16 *)sum = bpf_htons(~sum32 & 0xffff);
 }
 
-static __always_inline __sum16 csum_fold_helper(__u64 csum)
-{
-	csum = (csum & 0xffff) + (csum >> 16);
-	csum = (csum & 0xffff) + (csum >> 16);
-	return ~(__u16)csum;
-}
-
-/* Full TCP/UDP recompute. Virtio often delivers TCP check==0 for data packets;
- * incremental update then leaves an invalid checksum and AnyTLS/TLS stalls after SYN. */
+/* Full TCP/UDP recompute for virtio NEEDS_CSUM (check==0) packets. */
 static __always_inline void recompute_ipv4_l4(struct xdp_md *ctx, struct iphdr *iph,
 					     __sum16 *csum_field, __u8 proto)
 {
@@ -151,18 +151,24 @@ static __always_inline void recompute_ipv4_l4(struct xdp_md *ctx, struct iphdr *
 	if (tot < sizeof(*iph))
 		return;
 	__u32 l4_len = tot - sizeof(*iph);
-	l4_len &= 0x7ff; /* verifier: force non-negative bounded */
 	if (l4_len < 8 || l4_len > 1480)
 		return;
+
+	void *data = (void *)(long)ctx->data;
+	void *data_end = (void *)(long)ctx->data_end;
+	__u32 l4_off = sizeof(struct ethhdr) + sizeof(struct iphdr);
+	__u8 *l4 = (__u8 *)data + l4_off;
+	if (l4 >= (__u8 *)data_end)
+		return;
+	__u32 avail = (__u32)((__u8 *)data_end - l4);
+	if (l4_len > avail)
+		return; /* refuse partial recompute — safer than wrong csum */
 
 	__u32 zero = 0;
 	__u8 *buf = bpf_map_lookup_elem(&scratch, &zero);
 	if (!buf)
 		return;
-
-	__u32 l4_off = sizeof(struct ethhdr) + sizeof(struct iphdr);
-	/* Exact length — oversized fixed loads fail on short SYN/ACK and leave a stale csum. */
-	if (xfp_xdp_load_bytes(ctx, l4_off, buf, l4_len) < 0)
+	if (bpf_xdp_load_bytes(ctx, l4_off, buf, l4_len) < 0)
 		return;
 
 	if (proto == IPPROTO_TCP && l4_len >= 18) {
@@ -177,19 +183,17 @@ static __always_inline void recompute_ipv4_l4(struct xdp_md *ctx, struct iphdr *
 	if (rounded > 1480)
 		rounded = 1480;
 	if (rounded > l4_len) {
-		if (l4_len < 1480)
-			buf[l4_len] = 0;
+		buf[l4_len] = 0;
 		if (l4_len + 1 < 1480)
 			buf[l4_len + 1] = 0;
 		if (l4_len + 2 < 1480)
 			buf[l4_len + 2] = 0;
 	}
 
-	__be32 pseudo[3];
-	pseudo[0] = iph->saddr;
-	pseudo[1] = iph->daddr;
-	pseudo[2] = bpf_htonl(((__u32)proto << 16) | l4_len);
-	__wsum csum = bpf_csum_diff(NULL, 0, pseudo, sizeof(pseudo), 0);
+	/* Pseudo-header from packet memory (wire order) + proto/len bytes. */
+	__wsum csum = bpf_csum_diff(NULL, 0, &iph->saddr, 8, 0);
+	__u8 plen[4] = { 0, proto, (__u8)(l4_len >> 8), (__u8)l4_len };
+	csum = bpf_csum_diff(NULL, 0, (__be32 *)plen, 4, csum);
 
 	__u32 off = 0;
 #pragma unroll
@@ -214,7 +218,7 @@ static __always_inline void recompute_ipv4_l4(struct xdp_md *ctx, struct iphdr *
 	if (off + 4 <= rounded)
 		csum = bpf_csum_diff(NULL, 0, (__be32 *)(buf + off), 4, csum);
 
-	__sum16 folded = csum_fold_helper((__u64)csum);
+	__sum16 folded = csum_fold_helper(csum);
 	if (proto == IPPROTO_UDP && folded == 0)
 		folded = (__sum16)0xffff;
 	*csum_field = folded;
@@ -227,12 +231,12 @@ static __always_inline void apply_l4_csum(struct xdp_md *ctx, struct iphdr *iph,
 					 __be16 old_sp, __be16 new_sp,
 					 __be16 old_dp, __be16 new_dp)
 {
-	/* UDP check==0 means "no checksum" and stays valid after NAT. */
 	if (proto == IPPROTO_UDP && *check == 0)
 		return;
 
-	/* Always full-recompute TCP: virtio RX csum is fixed-on and often wrong
-	 * for payload packets — incremental NAT then breaks AnyTLS after SYN. */
+	/* Virtio often marks DATA_VALID while leaving a stale/wrong L4 check
+	 * field. Incremental NAT from that value is garbage → peer RSTs.
+	 * Always recompute TCP; UDP with non-zero check also recomputed. */
 	if (proto == IPPROTO_TCP) {
 		recompute_ipv4_l4(ctx, iph, check, proto);
 		return;
@@ -399,9 +403,12 @@ int xdp_forward(struct xdp_md *ctx)
 
 	__u16 snat = pick_snat(iph->saddr, sport, dport, proto, snat_min, snat_max);
 
+	/* Map dest_ip is big-endian numeric from userspace; convert once for wire. */
+	__be32 dest_be = bpf_htonl(rv->dest_ip);
+
 	struct ct_val cv = {
 		.client_ip = iph->saddr,
-		.dest_ip = rv->dest_ip,
+		.dest_ip = dest_be,
 		.client_port = sport,
 		.local_port = dport,
 		.dest_port = rv->dest_port,
@@ -421,7 +428,7 @@ int xdp_forward(struct xdp_md *ctx)
 	__be16 old_sp = ports[0];
 	__be16 old_dp = ports[1];
 	__be32 new_s = old_d;
-	__be32 new_d = rv->dest_ip;
+	__be32 new_d = dest_be;
 	__be16 new_sp = bpf_htons(snat);
 	__be16 new_dp = bpf_htons(rv->dest_port);
 
