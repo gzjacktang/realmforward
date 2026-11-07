@@ -695,6 +695,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 			"acme_email":      cfg.ACMEEmail,
 			"snat_min":        cfg.SNATPortMin,
 			"snat_max":        cfg.SNATPortMax,
+			"csum_fast":       cfg.CsumFast,
 			"update_url":      cfg.UpdateURL,
 			"auto_update":     cfg.AutoUpdate,
 			"panel_version":   cfg.PanelVersion,
@@ -740,6 +741,9 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 			if v, ok := body["auto_update"].(bool); ok {
 				c.AutoUpdate = v
 			}
+			if v, ok := body["csum_fast"].(bool); ok {
+				c.CsumFast = v
+			}
 			if v, ok := body["public_host"].(string); ok {
 				c.PublicHost = v
 			}
@@ -748,8 +752,12 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 			}
 		})
 		cfg = s.Cfg.Get()
-		_ = s.XDP.ApplyReservedPorts(cfg.SNATPortMin, cfg.SNATPortMax)
-		writeJSON(w, map[string]any{"ok": true, "note": "监听地址/端口变更需重启服务生效"})
+		csumMode := uint8(0)
+		if cfg.CsumFast {
+			csumMode = 1
+		}
+		_ = s.XDP.ApplyRuntimeConfig(cfg.SNATPortMin, cfg.SNATPortMax, csumMode)
+		writeJSON(w, map[string]any{"ok": true, "note": "监听地址/端口变更需重启服务生效；校验模式已即时生效"})
 	default:
 		writeErr(w, 405, "method")
 	}

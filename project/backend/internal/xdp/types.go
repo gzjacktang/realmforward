@@ -23,6 +23,7 @@ type Status struct {
 	Error     string `json:"error,omitempty"`
 	SNATMin   uint16 `json:"snat_min"`
 	SNATMax   uint16 `json:"snat_max"`
+	CsumMode  uint8  `json:"csum_mode"` // 0=safe, 1=fast
 	RuleCount int    `json:"rule_count"`
 }
 

@@ -22,9 +22,9 @@ func (m *Manager) SetObjectPath(string) {}
 
 func (m *Manager) Status() Status { return m.status }
 
-func (m *Manager) Load(iface string, mode string, snatMin, snatMax uint16) error {
+func (m *Manager) Load(iface string, mode string, snatMin, snatMax uint16, csumMode uint8) error {
 	m.status = Status{
-		Loaded: false, Mode: "", Iface: iface, SNATMin: snatMin, SNATMax: snatMax,
+		Loaded: false, Mode: "", Iface: iface, SNATMin: snatMin, SNATMax: snatMax, CsumMode: csumMode,
 		Error: "XDP load requires Linux (build and run on Debian/Ubuntu VPS)",
 	}
 	return fmt.Errorf("%s", m.status.Error)
@@ -50,6 +50,13 @@ func (m *Manager) GetStats() map[uint32]Stats {
 }
 
 func (m *Manager) ApplyReservedPorts(snatMin, snatMax uint16) error {
+	return nil
+}
+
+func (m *Manager) ApplyRuntimeConfig(snatMin, snatMax uint16, csumMode uint8) error {
+	m.status.SNATMin = snatMin
+	m.status.SNATMax = snatMax
+	m.status.CsumMode = csumMode
 	return nil
 }
 

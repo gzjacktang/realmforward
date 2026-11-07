@@ -55,7 +55,7 @@ type configVal struct {
 	GwMAC    [6]byte
 	LocalMAC [6]byte
 	HasGw    uint8
-	Pad      uint8
+	CsumMode uint8 // 0=safe full TCP recompute, 1=fast incremental
 }
 
 func New() *Manager {
@@ -70,7 +70,7 @@ func (m *Manager) Status() Status {
 	return m.status
 }
 
-func (m *Manager) Load(iface string, mode string, snatMin, snatMax uint16) error {
+func (m *Manager) Load(iface string, mode string, snatMin, snatMax uint16, csumMode uint8) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	_ = m.closeLocked()
@@ -126,7 +126,10 @@ func (m *Manager) Load(iface string, mode string, snatMin, snatMax uint16) error
 	m.cfgMap = coll.Maps["config"]
 	m.ctMap = coll.Maps["conntrack"]
 
-	cfg := configVal{Ifindex: uint32(ifi.Index), SNATMin: snatMin, SNATMax: snatMax}
+	if csumMode > 1 {
+		csumMode = 0
+	}
+	cfg := configVal{Ifindex: uint32(ifi.Index), SNATMin: snatMin, SNATMax: snatMax, CsumMode: csumMode}
 	if gw, local, ok := resolveEgressMACs(iface); ok {
 		cfg.GwMAC = gw
 		cfg.LocalMAC = local
@@ -142,7 +145,7 @@ func (m *Manager) Load(iface string, mode string, snatMin, snatMax uint16) error
 
 	m.status = Status{
 		Loaded: true, Mode: usedMode, Iface: iface,
-		SNATMin: snatMin, SNATMax: snatMax,
+		SNATMin: snatMin, SNATMax: snatMax, CsumMode: csumMode,
 	}
 	if cfg.HasGw == 0 {
 		m.status.Error = strings.TrimSpace(m.status.Error + " gateway MAC unresolved")
@@ -292,6 +295,28 @@ func (m *Manager) GetStats() map[uint32]Stats {
 }
 
 func (m *Manager) ApplyReservedPorts(snatMin, snatMax uint16) error {
+	return applyReservedPorts(snatMin, snatMax)
+}
+
+// ApplyRuntimeConfig updates SNAT range + csum_mode in the live BPF config map.
+func (m *Manager) ApplyRuntimeConfig(snatMin, snatMax uint16, csumMode uint8) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if csumMode > 1 {
+		csumMode = 0
+	}
+	if m.cfgMap != nil {
+		var key uint32
+		var cfg configVal
+		_ = m.cfgMap.Lookup(key, &cfg)
+		cfg.SNATMin = snatMin
+		cfg.SNATMax = snatMax
+		cfg.CsumMode = csumMode
+		_ = m.cfgMap.Put(key, cfg)
+	}
+	m.status.SNATMin = snatMin
+	m.status.SNATMax = snatMax
+	m.status.CsumMode = csumMode
 	return applyReservedPorts(snatMin, snatMax)
 }
 

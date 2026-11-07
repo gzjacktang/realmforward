@@ -83,7 +83,11 @@ func main() {
 	}
 
 	if !*noXDP {
-		if err := xm.Load(useIface, cfg.XDPMode, cfg.SNATPortMin, cfg.SNATPortMax); err != nil {
+		csumMode := uint8(0)
+		if cfg.CsumFast {
+			csumMode = 1
+		}
+		if err := xm.Load(useIface, cfg.XDPMode, cfg.SNATPortMin, cfg.SNATPortMax, csumMode); err != nil {
 			log.Printf("XDP load failed: %v", err)
 			log.Fatal("按设计：XDP 加载失败不降级，进程退出。可用 -no-xdp 仅调试 API。")
 		}
