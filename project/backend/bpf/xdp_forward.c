@@ -228,8 +228,11 @@ static __always_inline void recompute_ipv4_l4(struct xdp_md *ctx, struct iphdr *
 	*csum_field = folded;
 }
 
+/* is_return: packet from WAN/backend (valid L4 csum) → prefer incremental.
+ * Client→WAN still full-recomputes by default (virtio often has stale check). */
 static __always_inline void apply_l4_csum(struct xdp_md *ctx, struct iphdr *iph,
 					 __sum16 *check, __u8 proto, __u8 csum_mode,
+					 __u8 is_return,
 					 __be32 old_s, __be32 new_s,
 					 __be32 old_d, __be32 new_d,
 					 __be16 old_sp, __be16 new_sp,
@@ -238,10 +241,11 @@ static __always_inline void apply_l4_csum(struct xdp_md *ctx, struct iphdr *iph,
 	if (proto == IPPROTO_UDP && *check == 0)
 		return;
 
-	/* Safe default: full TCP recompute (virtio often has stale check!=0).
-	 * Fast mode: incremental when check already non-zero. */
 	if (proto == IPPROTO_TCP) {
-		if (csum_mode == CSUM_MODE_FAST && *check != 0) {
+		__u8 use_inc = 0;
+		if (*check != 0 && (is_return || csum_mode == CSUM_MODE_FAST))
+			use_inc = 1;
+		if (use_inc) {
 			csum_replace2(check, old_sp, new_sp);
 			csum_replace2(check, old_dp, new_dp);
 			csum_replace4(check, old_s, new_s);
@@ -387,7 +391,7 @@ int xdp_forward(struct xdp_md *ctx)
 				csum_replace4(&iph->check, old_d, new_d);
 				iph->saddr = new_s;
 				iph->daddr = new_d;
-				apply_l4_csum(ctx, iph, &tcp->check, proto, csum_mode,
+				apply_l4_csum(ctx, iph, &tcp->check, proto, csum_mode, 1,
 					      old_s, new_s, old_d, new_d, old_sp, new_sp, old_dp, new_dp);
 			} else {
 				struct udphdr *udp = (void *)(iph + 1);
@@ -399,7 +403,7 @@ int xdp_forward(struct xdp_md *ctx)
 				csum_replace4(&iph->check, old_d, new_d);
 				iph->saddr = new_s;
 				iph->daddr = new_d;
-				apply_l4_csum(ctx, iph, &udp->check, proto, csum_mode,
+				apply_l4_csum(ctx, iph, &udp->check, proto, csum_mode, 1,
 					      old_s, new_s, old_d, new_d, old_sp, new_sp, old_dp, new_dp);
 			}
 
@@ -455,7 +459,7 @@ int xdp_forward(struct xdp_md *ctx)
 		csum_replace4(&iph->check, old_d, new_d);
 		iph->saddr = new_s;
 		iph->daddr = new_d;
-		apply_l4_csum(ctx, iph, &tcp->check, proto, csum_mode,
+		apply_l4_csum(ctx, iph, &tcp->check, proto, csum_mode, 0,
 			      old_s, new_s, old_d, new_d, old_sp, new_sp, old_dp, new_dp);
 	} else {
 		struct udphdr *udp = (void *)(iph + 1);
@@ -467,7 +471,7 @@ int xdp_forward(struct xdp_md *ctx)
 		csum_replace4(&iph->check, old_d, new_d);
 		iph->saddr = new_s;
 		iph->daddr = new_d;
-		apply_l4_csum(ctx, iph, &udp->check, proto, csum_mode,
+		apply_l4_csum(ctx, iph, &udp->check, proto, csum_mode, 0,
 			      old_s, new_s, old_d, new_d, old_sp, new_sp, old_dp, new_dp);
 	}
 
