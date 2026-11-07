@@ -311,7 +311,7 @@ func (m *Manager) openNft(port int, proto string) error {
 	if m.nftHasAccept(ch, port, proto) {
 		return nil
 	}
-	comment := fmt.Sprintf("nftfp-%d-%s", port, proto)
+	comment := fmt.Sprintf("realmfp-%d-%s", port, proto)
 	return run("nft", "add", "rule", ch.Family, ch.Table, ch.Chain,
 		proto, "dport", strconv.Itoa(port), "accept", "comment", comment)
 }

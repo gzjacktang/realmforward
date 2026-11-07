@@ -503,7 +503,7 @@ async function renderLogs(el) {
 async function renderSettings(el) {
   const s = await api("/settings");
   el.innerHTML = `
-    <div class="page-head"><div><h2>面板设置</h2><p class="sub">更新 · 证书 · 账号 · 卸载 · VPS 命令 <span class="mono">nftfp</span></p></div></div>
+    <div class="page-head"><div><h2>面板设置</h2><p class="sub">更新 · 证书 · 账号 · 卸载 · VPS 命令 <span class="mono">realmfp</span></p></div></div>
     <div class="grid grid-2">
       <div class="panel"><div class="panel-h"><h3>版本与更新</h3></div><div class="form-box">
         <div class="ver-row"><div><div class="name">当前面板</div><div class="ver">v${esc(s.panel_version || s.installed_version || "?")}</div></div></div>
@@ -513,13 +513,13 @@ async function renderSettings(el) {
         <pre id="upd-log" class="upd-log mono" hidden></pre>
         <div class="field"><label>自动更新</label>
           <button type="button" class="toggle ${s.auto_update ? "on" : ""}" id="au"></button></div>
-        <div class="field"><label>更新地址</label><input id="upd" class="mono" value="${esc(s.update_url || "https://github.com/gzjacktang/nftforward/releases/latest")}" /></div>
+        <div class="field"><label>更新地址</label><input id="upd" class="mono" value="${esc(s.update_url || "https://github.com/gzjacktang/realmforward/releases/latest")}" /></div>
         <div style="display:flex;flex-wrap:wrap;gap:8px">
           <button class="btn btn-primary" id="do-update">${s.update_available ? "立即更新到最新" : "检查并更新"}</button>
           <button class="btn btn-ghost" id="refresh-upd">刷新状态</button>
           <button class="btn btn-warn" id="restart">重启面板</button>
         </div>
-        <p class="hint">更新在独立任务中执行，不会被面板重启中断。也可在 VPS 执行 <span class="mono">nftfp update</span></p>
+        <p class="hint">更新在独立任务中执行，不会被面板重启中断。也可在 VPS 执行 <span class="mono">realmfp update</span></p>
       </div></div>
       <div class="panel"><div class="panel-h"><h3>访问</h3></div><div class="form-box">
         <div class="field"><label>端口</label><input id="lp" class="mono" value="${s.listen_port}" /></div>
@@ -547,7 +547,7 @@ async function renderSettings(el) {
         <button class="btn btn-primary" id="tls-issue">安装 / 更换证书</button>
         <button class="btn btn-ghost" id="regen">仅重生成自签</button>
       </div>
-      <p class="hint">Let's Encrypt 需要域名解析到本机且 <span class="mono">80</span> 可用。VPS: <span class="mono">nftfp cert</span></p>
+      <p class="hint">Let's Encrypt 需要域名解析到本机且 <span class="mono">80</span> 可用。VPS: <span class="mono">realmfp cert</span></p>
     </div></div>
     <div class="panel" style="margin-top:14px"><div class="panel-h"><h3>账号</h3></div><div class="form-box">
       <div class="form-row">
@@ -556,7 +556,7 @@ async function renderSettings(el) {
         <div class="field"><label>新密码（至少 8 位，留空不改）</label><input id="np" type="password" autocomplete="new-password" /></div>
       </div>
       <button class="btn btn-primary" id="acc">保存账号</button>
-      <p class="hint" id="acc-hint">可只改用户名；改密码需当前密码 + 新密码。VPS: <span class="mono">nftfp passwd</span></p>
+      <p class="hint" id="acc-hint">可只改用户名；改密码需当前密码 + 新密码。VPS: <span class="mono">realmfp passwd</span></p>
     </div></div>
     <div class="panel" style="margin-top:14px"><div class="panel-h"><h3>危险操作</h3></div><div class="form-box">
       <p class="hint">卸载将停止服务并删除程序；默认同时删除配置/数据库/证书，否则下次安装会沿用旧配置并跳过证书向导。</p>

@@ -14,20 +14,20 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/gzjacktang/nftforward/internal/api"
-	"github.com/gzjacktang/nftforward/internal/auth"
-	"github.com/gzjacktang/nftforward/internal/config"
-	"github.com/gzjacktang/nftforward/internal/firewall"
-	"github.com/gzjacktang/nftforward/internal/fwd"
-	"github.com/gzjacktang/nftforward/internal/store"
-	"github.com/gzjacktang/nftforward/internal/tgbot"
-	"github.com/gzjacktang/nftforward/internal/tlsutil"
-	"github.com/gzjacktang/nftforward/internal/version"
+	"github.com/gzjacktang/realmforward/internal/api"
+	"github.com/gzjacktang/realmforward/internal/auth"
+	"github.com/gzjacktang/realmforward/internal/config"
+	"github.com/gzjacktang/realmforward/internal/firewall"
+	"github.com/gzjacktang/realmforward/internal/fwd"
+	"github.com/gzjacktang/realmforward/internal/store"
+	"github.com/gzjacktang/realmforward/internal/tgbot"
+	"github.com/gzjacktang/realmforward/internal/tlsutil"
+	"github.com/gzjacktang/realmforward/internal/version"
 )
 
 func main() {
 	showVersion := flag.Bool("version", false, "print version and exit")
-	dataDir := flag.String("data", "/var/lib/nftfp", "data directory")
+	dataDir := flag.String("data", "/var/lib/realmfp", "data directory")
 	iface := flag.String("iface", "", "bind/outgoing interface for Realm (default: auto)")
 	webDir := flag.String("web", "", "static web directory")
 	realmBin := flag.String("realm", "", "path to realm binary")
@@ -61,7 +61,7 @@ func main() {
 	}
 	if created {
 		fmt.Println("========================================")
-		fmt.Println("NFT Forward Panel (Realm) — 初始账号")
+		fmt.Println("Realm Forward Panel (Realm) — 初始账号")
 		fmt.Println("用户名: admin")
 		fmt.Printf("密码:   %s\n", plain)
 		fmt.Println("请立即登录后修改密码；此密码只显示一次。")
@@ -115,7 +115,7 @@ func main() {
 	switch strings.ToLower(cfg.TLSMode) {
 	case "letsencrypt", "le", "zerossl", "zero":
 		if _, err := os.Stat(cfg.TLSCertFile); err != nil {
-			log.Fatalf("证书不存在: %s （请运行: nftfp cert）", cfg.TLSCertFile)
+			log.Fatalf("证书不存在: %s （请运行: realmfp cert）", cfg.TLSCertFile)
 		}
 		if _, err := os.Stat(cfg.TLSKeyFile); err != nil {
 			log.Fatalf("私钥不存在: %s", cfg.TLSKeyFile)

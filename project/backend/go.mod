@@ -1,4 +1,4 @@
-module github.com/gzjacktang/nftforward
+module github.com/gzjacktang/realmforward
 
 go 1.26.5
 

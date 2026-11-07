@@ -59,13 +59,13 @@ func (m *Manager) Load(iface string) error {
 	defer m.mu.Unlock()
 
 	if m.dataDir == "" {
-		m.dataDir = "/var/lib/nftfp"
+		m.dataDir = "/var/lib/realmfp"
 	}
 	if err := os.MkdirAll(m.dataDir, 0o755); err != nil {
 		return err
 	}
 	// Drop leftover nftables table from older panel versions.
-	_ = exec.Command("nft", "delete", "table", "ip", "nftfp").Run()
+	_ = exec.Command("nft", "delete", "table", "ip", "realmfp").Run()
 
 	bin, err := resolveRealmBin(m.realmBin)
 	if err != nil {
@@ -286,7 +286,7 @@ func resolveRealmBin(override string) (string, error) {
 		candidates = append(candidates, filepath.Join(filepath.Dir(exe), "realm"))
 	}
 	candidates = append(candidates,
-		"/usr/lib/nftfp/realm",
+		"/usr/lib/realmfp/realm",
 		"/usr/local/bin/realm",
 		"realm",
 	)
@@ -301,5 +301,5 @@ func resolveRealmBin(override string) (string, error) {
 			return c, nil
 		}
 	}
-	return "", fmt.Errorf("realm binary not found (install to /usr/lib/nftfp/realm or PATH)")
+	return "", fmt.Errorf("realm binary not found (install to /usr/lib/realmfp/realm or PATH)")
 }

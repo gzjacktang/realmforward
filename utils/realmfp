@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# nftfp — VPS 控制台：安装 / 卸载 / 更新 / 账号 / 证书 / 服务
+# realmfp — VPS 控制台：安装 / 卸载 / 更新 / 账号 / 证书 / 服务
 # 安装与更新均从 GitHub Releases 拉取预编译包（无需 Go / clang）
 set -euo pipefail
 
-DATA="${XFP_DATA:-/var/lib/nftfp}"
-LIBDIR="${XFP_LIBDIR:-/usr/lib/nftfp}"
-SHARE="${XFP_SHARE:-/usr/share/nftfp}"
-SERVICE=nftfp.service
-GITHUB_REPO="${XFP_GITHUB_REPO:-gzjacktang/nftforward}"
-RELEASE_CACHE="${XFP_RELEASE_CACHE:-/opt/nftfp/release}"
+DATA="${XFP_DATA:-/var/lib/realmfp}"
+LIBDIR="${XFP_LIBDIR:-/usr/lib/realmfp}"
+SHARE="${XFP_SHARE:-/usr/share/realmfp}"
+SERVICE=realmfp.service
+GITHUB_REPO="${XFP_GITHUB_REPO:-gzjacktang/realmforward}"
+RELEASE_CACHE="${XFP_RELEASE_CACHE:-/opt/realmfp/release}"
 
 red()  { printf '\033[31m%s\033[0m\n' "$*"; }
 grn()  { printf '\033[32m%s\033[0m\n' "$*"; }
@@ -17,7 +17,7 @@ bold() { printf '\033[1m%s\033[0m\n' "$*"; }
 
 need_root() {
   if [[ "$(id -u)" -ne 0 ]]; then
-    red "请使用 root 运行: sudo nftfp $*"
+    red "请使用 root 运行: sudo realmfp $*"
     exit 1
   fi
 }
@@ -29,7 +29,7 @@ cfg_get() {
 import json,sys
 k,d=sys.argv[1],sys.argv[2]
 try:
-  c=json.load(open("/var/lib/nftfp/config.json"))
+  c=json.load(open("/var/lib/realmfp/config.json"))
   v=c.get(k)
   print(v if v not in (None,"") else d)
 except Exception:
@@ -65,14 +65,14 @@ fetch_release_pkg() {
 
   json="$(curl -fsSL "$api")"
   tag="$(printf '%s' "$json" | jq -r '.tag_name')"
-  asset_url="$(printf '%s' "$json" | jq -r --arg a "nftforward-${tag}-${arch}.tar.gz" \
+  asset_url="$(printf '%s' "$json" | jq -r --arg a "realmforward-${tag}-${arch}.tar.gz" \
     '.assets[] | select(.name==$a) | .browser_download_url')"
   if [[ -z "$asset_url" || "$asset_url" == "null" ]]; then
-    asset_url="$(printf '%s' "$json" | jq -r --arg a "nftforward-v${tag#v}-${arch}.tar.gz" \
+    asset_url="$(printf '%s' "$json" | jq -r --arg a "realmforward-v${tag#v}-${arch}.tar.gz" \
       '.assets[] | select(.name==$a) | .browser_download_url')"
   fi
   if [[ -z "$asset_url" || "$asset_url" == "null" ]]; then
-    red "未找到安装包: nftforward-${tag}-${arch}.tar.gz"
+    red "未找到安装包: realmforward-${tag}-${arch}.tar.gz"
     printf '%s' "$json" | jq -r '.assets[].name' >&2 || true
     rm -rf "$_XFP_TMP"
     exit 1
@@ -83,13 +83,13 @@ fetch_release_pkg() {
   mkdir -p "$_XFP_TMP/pkg"
   tar -xzf "$_XFP_TMP/pkg.tgz" -C "$_XFP_TMP/pkg"
   local bin
-  bin="$(find "$_XFP_TMP/pkg" -maxdepth 3 -type f -path '*/bin/nft-panel' | head -1)"
+  bin="$(find "$_XFP_TMP/pkg" -maxdepth 3 -type f -path '*/bin/realm-panel' | head -1)"
   _XFP_ROOT="$(cd "$(dirname "$bin")/.." && pwd)"
-  [[ -x "$_XFP_ROOT/bin/nft-panel" ]] || { red "解压失败"; rm -rf "$_XFP_TMP"; exit 1; }
+  [[ -x "$_XFP_ROOT/bin/realm-panel" ]] || { red "解压失败"; rm -rf "$_XFP_TMP"; exit 1; }
 }
 
 cmd_status() {
-  bold "=== NFT Forward Panel 状态 ==="
+  bold "=== Realm Forward Panel 状态 ==="
   if systemctl cat "$SERVICE" >/dev/null 2>&1; then
     systemctl --no-pager --full status "$SERVICE" | head -20 || true
   else
@@ -101,12 +101,12 @@ cmd_status() {
   port="$(cfg_get listen_port 2888)"
   base="$(cfg_get base_path /)"
   [[ "$base" == "/" ]] && base=""
-  ver="$(tr -d '[:space:]' </opt/nftfp/VERSION 2>/dev/null || echo "?")"
+  ver="$(tr -d '[:space:]' </opt/realmfp/VERSION 2>/dev/null || echo "?")"
   echo "版本: v${ver}"
   echo "面板: https://${host}:${port}${base}/"
   echo "证书: $(cfg_get tls_mode selfsigned)"
-  if [[ -x /usr/local/bin/nft-panel ]]; then
-    echo "二进制: /usr/local/bin/nft-panel"
+  if [[ -x /usr/local/bin/realm-panel ]]; then
+    echo "二进制: /usr/local/bin/realm-panel"
   fi
   if pgrep -x realm >/dev/null 2>&1; then
     grn "realm: 运行中"
@@ -135,7 +135,7 @@ cmd_install() {
     XFP_KEEP_DATA="${XFP_KEEP_DATA:-0}" \
     bash "$_XFP_ROOT/utils/install-release.sh"
   rm -rf "$_XFP_TMP"
-  grn "CLI: nftfp"
+  grn "CLI: realmfp"
 }
 
 cmd_update() {
@@ -170,14 +170,14 @@ cmd_uninstall() {
   pkill -x realm 2>/dev/null || true
   nft delete table ip nftfp 2>/dev/null || true
   systemctl disable "$SERVICE" 2>/dev/null || true
-  systemctl stop nft-panel-update.timer 2>/dev/null || true
-  systemctl disable nft-panel-update.timer 2>/dev/null || true
-  rm -f /etc/systemd/system/nftfp.service
-  rm -f /etc/systemd/system/nft-panel-update.service
-  rm -f /etc/systemd/system/nft-panel-update.timer
+  systemctl stop realm-panel-update.timer 2>/dev/null || true
+  systemctl disable realm-panel-update.timer 2>/dev/null || true
+  rm -f /etc/systemd/system/realmfp.service
+  rm -f /etc/systemd/system/realm-panel-update.service
+  rm -f /etc/systemd/system/realm-panel-update.timer
   systemctl daemon-reload
-  rm -f /usr/local/bin/nft-panel /usr/local/bin/nftfp /usr/local/bin/xdp-panel /usr/local/bin/xdp
-  rm -f /usr/local/sbin/nft-panel-issue-cert /usr/local/sbin/nft-panel-auto-update /usr/local/sbin/nft-panel-do-update
+  rm -f /usr/local/bin/realm-panel /usr/local/bin/realmfp /usr/local/bin/xdp-panel /usr/local/bin/xdp
+  rm -f /usr/local/sbin/realm-panel-issue-cert /usr/local/sbin/realm-panel-auto-update /usr/local/sbin/realm-panel-do-update
   rm -rf "$LIBDIR" "$SHARE"
   if [[ "$wipe" == "yes" ]]; then
     rm -rf "$DATA"
@@ -185,7 +185,7 @@ cmd_uninstall() {
   else
     echo "已保留 $DATA（下次安装会询问是否清空并重新配置）"
   fi
-  rm -rf /opt/nftfp
+  rm -rf /opt/realmfp
   grn "卸载完成"
 }
 
@@ -195,7 +195,7 @@ cmd_passwd() {
   local user newp
   user="$(python3 - <<'PY'
 import sqlite3
-c=sqlite3.connect("/var/lib/nftfp/panel.db")
+c=sqlite3.connect("/var/lib/realmfp/panel.db")
 r=c.execute("select username from users where id=1").fetchone()
 print(r[0] if r else "admin")
 PY
@@ -214,7 +214,7 @@ except ImportError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "bcrypt"])
     import bcrypt
 hashed = bcrypt.hashpw(plain.encode(), bcrypt.gensalt()).decode()
-db = sqlite3.connect("/var/lib/nftfp/panel.db")
+db = sqlite3.connect("/var/lib/realmfp/panel.db")
 db.execute("UPDATE users SET username=?, password_hash=?, updated_at=datetime('now') WHERE id=1", (user, hashed))
 db.execute("DELETE FROM sessions")
 db.commit()
@@ -226,18 +226,18 @@ PY
 
 cmd_cert() {
   need_root
-  if [[ ! -x /usr/local/sbin/nftfp-issue-cert ]]; then
+  if [[ ! -x /usr/local/sbin/realmfp-issue-cert ]]; then
     if [[ -f "$RELEASE_CACHE/utils/issue-cert.sh" ]]; then
-      install -m 0755 "$RELEASE_CACHE/utils/issue-cert.sh" /usr/local/sbin/nftfp-issue-cert
+      install -m 0755 "$RELEASE_CACHE/utils/issue-cert.sh" /usr/local/sbin/realmfp-issue-cert
     else
-      red "找不到 issue-cert 脚本，请先 nftfp install / nftfp update"
+      red "找不到 issue-cert 脚本，请先 realmfp install / realmfp update"
       exit 1
     fi
   fi
   if [[ "${1:-}" == "prompt" || -z "${1:-}" ]]; then
-    /usr/local/sbin/nftfp-issue-cert prompt
+    /usr/local/sbin/realmfp-issue-cert prompt
   else
-    /usr/local/sbin/nftfp-issue-cert "$@"
+    /usr/local/sbin/realmfp-issue-cert "$@"
   fi
   systemctl restart "$SERVICE" 2>/dev/null || true
   grn "证书流程结束（已尝试重启服务）"
@@ -276,21 +276,21 @@ cmd_menu() {
 
 usage() {
   cat <<EOF
-nftfp — NFT Forward Panel 管理工具
+realmfp — Realm Forward Panel 管理工具
 
 用法:
-  nftfp                 打开交互控制菜单
-  nftfp status          查看状态
-  nftfp start|stop|restart
-  nftfp install         从 GitHub Releases 安装
-  nftfp update [vX.Y.Z] 拉取最新（或指定 tag）预编译包并更新
-  nftfp uninstall       卸载
-  nftfp passwd          更改用户名/密码
-  nftfp cert [prompt|selfsigned|letsencrypt|zerossl ...]
-  nftfp help
+  realmfp                 打开交互控制菜单
+  realmfp status          查看状态
+  realmfp start|stop|restart
+  realmfp install         从 GitHub Releases 安装
+  realmfp update [vX.Y.Z] 拉取最新（或指定 tag）预编译包并更新
+  realmfp uninstall       卸载
+  realmfp passwd          更改用户名/密码
+  realmfp cert [prompt|selfsigned|letsencrypt|zerossl ...]
+  realmfp help
 
 一键安装（新机器，无需 Go/clang）:
-  bash <(curl -fsSL https://raw.githubusercontent.com/gzjacktang/nftforward/main/utils/install-remote.sh)
+  bash <(curl -fsSL https://raw.githubusercontent.com/gzjacktang/realmforward/main/utils/install-remote.sh)
 EOF
 }
 

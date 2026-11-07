@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Issue or renew TLS cert for NFT Forward Panel.
+# Issue or renew TLS cert for Realm Forward Panel.
 # Modes: letsencrypt | zerossl | selfsigned | prompt
 set -euo pipefail
 
-DATA="${DATA:-/var/lib/nftfp}"
+DATA="${DATA:-/var/lib/realmfp}"
 CFG="$DATA/config.json"
 MODE="${1:-}"          # letsencrypt | zerossl | selfsigned | ""
 DOMAIN="${2:-}"
@@ -16,7 +16,7 @@ need_root() {
 read_cfg() {
   python3 - <<'PY'
 import json,os
-p="/var/lib/nftfp/config.json"
+p="/var/lib/realmfp/config.json"
 if not os.path.exists(p):
     print("")
     raise SystemExit
@@ -55,11 +55,11 @@ issue_selfsigned() {
   local cert="$certdir/cert.pem" key="$certdir/key.pem"
   openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -days 365 -nodes \
     -keyout "$key" -out "$cert" \
-    -subj "/O=NFT Forward Panel/CN=${domain:-nftfp}" \
+    -subj "/O=Realm Forward Panel/CN=${domain:-realmfp}" \
     -addext "subjectAltName=DNS:${domain:-localhost},IP:127.0.0.1" 2>/dev/null \
   || openssl req -x509 -newkey rsa:2048 -days 365 -nodes \
     -keyout "$key" -out "$cert" \
-    -subj "/O=NFT Forward Panel/CN=${domain:-nftfp}"
+    -subj "/O=Realm Forward Panel/CN=${domain:-realmfp}"
   chmod 600 "$key"
   write_cfg "selfsigned" "$domain" "" "$cert" "$key"
   echo "已生成自签证书: $cert"
@@ -102,11 +102,11 @@ issue_letsencrypt() {
 
   # renew deploy hook
   mkdir -p /etc/letsencrypt/renewal-hooks/deploy
-  cat >/etc/letsencrypt/renewal-hooks/deploy/nftfp.sh <<'HOOK'
+  cat >/etc/letsencrypt/renewal-hooks/deploy/realmfp.sh <<'HOOK'
 #!/bin/bash
-systemctl try-reload-or-restart nftfp.service 2>/dev/null || systemctl restart nftfp.service 2>/dev/null || true
+systemctl try-reload-or-restart realmfp.service 2>/dev/null || systemctl restart realmfp.service 2>/dev/null || true
 HOOK
-  chmod +x /etc/letsencrypt/renewal-hooks/deploy/nftfp.sh
+  chmod +x /etc/letsencrypt/renewal-hooks/deploy/realmfp.sh
 
   echo "Let's Encrypt 证书就绪: $live/fullchain.pem"
 }
@@ -159,7 +159,7 @@ issue_zerossl() {
   "$ACME" --install-cert -d "$domain" --ecc \
     --fullchain-file "$cert" \
     --key-file "$key" \
-    --reloadcmd "systemctl try-reload-or-restart nftfp.service 2>/dev/null || systemctl restart nftfp.service 2>/dev/null || true"
+    --reloadcmd "systemctl try-reload-or-restart realmfp.service 2>/dev/null || systemctl restart realmfp.service 2>/dev/null || true"
 
   chmod 600 "$key"
   write_cfg "zerossl" "$domain" "$email" "$cert" "$key"

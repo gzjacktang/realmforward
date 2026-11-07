@@ -11,10 +11,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gzjacktang/nftforward/internal/config"
-	"github.com/gzjacktang/nftforward/internal/firewall"
-	"github.com/gzjacktang/nftforward/internal/store"
-	"github.com/gzjacktang/nftforward/internal/fwd"
+	"github.com/gzjacktang/realmforward/internal/config"
+	"github.com/gzjacktang/realmforward/internal/firewall"
+	"github.com/gzjacktang/realmforward/internal/store"
+	"github.com/gzjacktang/realmforward/internal/fwd"
 )
 
 type Bot struct {

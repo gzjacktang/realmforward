@@ -57,8 +57,8 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: nftforward-linux-${{ matrix.goarch }}
-          path: dist/nftforward-v${{ steps.ver.outputs.ver }}-linux-${{ matrix.goarch }}.tar.gz
+          name: realmforward-linux-${{ matrix.goarch }}
+          path: dist/realmforward-v${{ steps.ver.outputs.ver }}-linux-${{ matrix.goarch }}.tar.gz
           if-no-files-found: error
 
   publish:
@@ -84,17 +84,17 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: dist
-          pattern: nftforward-linux-*
+          pattern: realmforward-linux-*
           merge-multiple: true
 
       - name: Create / update release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
-          name: NFT Forward Panel v${{ steps.ver.outputs.ver }}
+          name: Realm Forward Panel v${{ steps.ver.outputs.ver }}
           generate_release_notes: true
           files: |
-            dist/nftforward-v${{ steps.ver.outputs.ver }}-linux-amd64.tar.gz
-            dist/nftforward-v${{ steps.ver.outputs.ver }}-linux-arm64.tar.gz
+            dist/realmforward-v${{ steps.ver.outputs.ver }}-linux-amd64.tar.gz
+            dist/realmforward-v${{ steps.ver.outputs.ver }}-linux-arm64.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

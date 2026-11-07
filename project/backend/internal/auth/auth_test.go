@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/gzjacktang/nftforward/internal/store"
+	"github.com/gzjacktang/realmforward/internal/store"
 )
 
 func TestLoginRoundTrip(t *testing.T) {

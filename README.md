@@ -1,4 +1,4 @@
-# NFT Forward Panel
+# Realm Forward Panel
 
 基于 **[Realm](https://github.com/zhboner/realm)** 的 IPv4 端口转发面板（用户态 splice 零拷贝）。
 
@@ -7,10 +7,10 @@
 ## 一键安装
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/gzjacktang/nftforward/main/utils/install-remote.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/gzjacktang/realmforward/main/utils/install-remote.sh)
 ```
 
-管理命令：`nftfp`（status / update / cert / passwd / uninstall）
+管理命令：`realmfp`（status / update / cert / passwd / uninstall）
 
 ## 特性
 
@@ -22,6 +22,6 @@ bash <(curl -fsSL https://raw.githubusercontent.com/gzjacktang/nftforward/main/u
 ## 默认
 
 - 面板端口：`2888`（HTTPS）
-- 数据目录：`/var/lib/nftfp`
-- Realm 配置：`/var/lib/nftfp/realm.json`
-- 服务名：`nftfp.service`
+- 数据目录：`/var/lib/realmfp`
+- Realm 配置：`/var/lib/realmfp/realm.json`
+- 服务名：`realmfp.service`

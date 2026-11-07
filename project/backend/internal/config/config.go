@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/gzjacktang/nftforward/internal/version"
+	"github.com/gzjacktang/realmforward/internal/version"
 )
 
 type Config struct {
@@ -42,7 +42,7 @@ func Default(dataDir string) *Config {
 		ACMEEmail:    "",
 		TLSCertFile:  filepath.Join(dataDir, "tls", "cert.pem"),
 		TLSKeyFile:   filepath.Join(dataDir, "tls", "key.pem"),
-		UpdateURL:    "https://github.com/gzjacktang/nftforward/releases/latest",
+		UpdateURL:    "https://github.com/gzjacktang/realmforward/releases/latest",
 		AutoUpdate:   true,
 		TGAdminIDs:   nil,
 		TGEnabled:    false,
@@ -78,8 +78,8 @@ func LoadOrCreate(path string, dataDir string) (*Manager, error) {
 	if m.cfg.ListenPort == 0 {
 		m.cfg.ListenPort = 2888
 	}
-	if m.cfg.UpdateURL == "" || strings.Contains(m.cfg.UpdateURL, "xdpforward") {
-		m.cfg.UpdateURL = "https://github.com/gzjacktang/nftforward/releases/latest"
+	if m.cfg.UpdateURL == "" || strings.Contains(m.cfg.UpdateURL, "xdpforward") || strings.Contains(m.cfg.UpdateURL, "nftforward") {
+		m.cfg.UpdateURL = "https://github.com/gzjacktang/realmforward/releases/latest"
 	}
 	m.cfg.PanelVersion = version.Version
 	m.cfg.EngineVer = version.EngineVersion

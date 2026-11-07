@@ -13,7 +13,7 @@ except ImportError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "bcrypt"])
     import bcrypt
 
-DB = "/var/lib/nftfp/panel.db"
+DB = "/var/lib/realmfp/panel.db"
 alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
 plain = "".join(secrets.choice(alphabet) for _ in range(16))
 hashed = bcrypt.hashpw(plain.encode(), bcrypt.gensalt()).decode()
@@ -38,7 +38,7 @@ conn.close()
 ctx = ssl._create_unverified_context()
 base = "/"
 try:
-    with open("/var/lib/nftfp/config.json") as f:
+    with open("/var/lib/realmfp/config.json") as f:
         base = (json.load(f).get("base_path") or "/").rstrip("/")
 except Exception:
     pass

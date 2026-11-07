@@ -3,10 +3,11 @@
 set -euo pipefail
 
 PREFIX="${PREFIX:-/usr/local}"
-LIBDIR=/usr/lib/nftfp
-SHARE=/usr/share/nftfp
-DATA=/var/lib/nftfp
+LIBDIR=/usr/lib/realmfp
+SHARE=/usr/share/realmfp
+DATA=/var/lib/realmfp
 OLD_DATA=/var/lib/xdp-forward-panel
+NFT_DATA=/var/lib/nftfp
 
 PKG_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
@@ -15,8 +16,8 @@ if [[ "$(id -u)" -ne 0 ]]; then
   exit 1
 fi
 
-if [[ ! -x "$PKG_ROOT/bin/nft-panel" ]]; then
-  echo "找不到预编译二进制: $PKG_ROOT/bin/nft-panel" >&2
+if [[ ! -x "$PKG_ROOT/bin/realm-panel" ]]; then
+  echo "找不到预编译二进制: $PKG_ROOT/bin/realm-panel" >&2
   exit 1
 fi
 
@@ -30,11 +31,19 @@ systemctl stop xdp-forward-panel.service 2>/dev/null || true
 systemctl disable xdp-forward-panel.service 2>/dev/null || true
 systemctl stop xdp-panel-update.timer 2>/dev/null || true
 systemctl disable xdp-panel-update.timer 2>/dev/null || true
+systemctl stop nftfp.service 2>/dev/null || true
+systemctl disable nftfp.service 2>/dev/null || true
+systemctl stop nftfp-update.timer 2>/dev/null || true
+systemctl disable nftfp-update.timer 2>/dev/null || true
+rm -f /usr/local/bin/nftfp /usr/local/bin/nft-panel 2>/dev/null || true
 
 mkdir -p "$LIBDIR" "$SHARE/web" "$DATA" "$PREFIX/bin" /usr/local/sbin
 
 # Migrate old data once
-if [[ ! -f "$DATA/config.json" && -f "$OLD_DATA/config.json" ]]; then
+if [[ ! -f "$DATA/config.json" && -f "$NFT_DATA/config.json" ]]; then
+  echo "迁移旧数据 $NFT_DATA → $DATA"
+  cp -a "$NFT_DATA/." "$DATA/"
+elif [[ ! -f "$DATA/config.json" && -f "$OLD_DATA/config.json" ]]; then
   echo "迁移旧数据 $OLD_DATA → $DATA"
   cp -a "$OLD_DATA/." "$DATA/"
 fi
@@ -47,23 +56,23 @@ if [[ ! -x "$PKG_ROOT/lib/realm" ]]; then
   exit 1
 fi
 
-echo "安装 NFT Forward Panel (Realm) v$VER …"
+echo "安装 Realm Forward Panel v$VER …"
 pkill -x realm 2>/dev/null || true
 nft delete table ip nftfp 2>/dev/null || true
-install -m 0755 "$PKG_ROOT/bin/nft-panel" "$PREFIX/bin/nft-panel"
-install -m 0755 "$PKG_ROOT/bin/nftfp" /usr/local/bin/nftfp
+install -m 0755 "$PKG_ROOT/bin/realm-panel" "$PREFIX/bin/realm-panel"
+install -m 0755 "$PKG_ROOT/bin/realmfp" /usr/local/bin/realmfp
 install -m 0755 "$PKG_ROOT/lib/realm" "$LIBDIR/realm"
 install -m 0755 "$PKG_ROOT/lib/realm" /usr/local/bin/realm
 install -m 0644 "$PKG_ROOT/web/"* "$SHARE/web/"
-install -m 0755 "$PKG_ROOT/utils/issue-cert.sh" /usr/local/sbin/nftfp-issue-cert
-install -m 0755 "$PKG_ROOT/utils/auto-update.sh" /usr/local/sbin/nftfp-auto-update
-install -m 0755 "$PKG_ROOT/utils/do-update.sh" /usr/local/sbin/nftfp-do-update
-install -m 0644 "$PKG_ROOT/utils/nftfp.service" /etc/systemd/system/nftfp.service
+install -m 0755 "$PKG_ROOT/utils/issue-cert.sh" /usr/local/sbin/realmfp-issue-cert
+install -m 0755 "$PKG_ROOT/utils/auto-update.sh" /usr/local/sbin/realmfp-auto-update
+install -m 0755 "$PKG_ROOT/utils/do-update.sh" /usr/local/sbin/realmfp-do-update
+install -m 0644 "$PKG_ROOT/utils/realmfp.service" /etc/systemd/system/realmfp.service
 
-mkdir -p /opt/nftfp
-cp -a "$PKG_ROOT/." /opt/nftfp/release/ 2>/dev/null \
-  || { mkdir -p /opt/nftfp/release && cp -a "$PKG_ROOT"/. /opt/nftfp/release/; }
-echo "$VER" >/opt/nftfp/VERSION
+mkdir -p /opt/realmfp
+cp -a "$PKG_ROOT/." /opt/realmfp/release/ 2>/dev/null \
+  || { mkdir -p /opt/realmfp/release && cp -a "$PKG_ROOT"/. /opt/realmfp/release/; }
+echo "$VER" >/opt/realmfp/VERSION
 
 NEED_SETUP=0
 HAS_OLD=0
@@ -110,7 +119,7 @@ if [[ ! -f "$DATA/config.json" ]]; then
   "acme_email": "${XFP_EMAIL:-}",
   "tls_cert_file": "$DATA/tls/cert.pem",
   "tls_key_file": "$DATA/tls/key.pem",
-  "update_url": "https://github.com/gzjacktang/nftforward/releases/latest",
+  "update_url": "https://github.com/gzjacktang/realmforward/releases/latest",
   "auto_update": true,
   "tg_token": "",
   "tg_admin_ids": null,
@@ -120,12 +129,12 @@ EOF
 else
   python3 - <<'PY' || true
 import json
-p="/var/lib/nftfp/config.json"
+p="/var/lib/realmfp/config.json"
 c=json.load(open(p))
 u=(c.get("update_url") or "")
-if "xdpforward" in u or u.endswith(".git") or not u:
-    c["update_url"]="https://github.com/gzjacktang/nftforward/releases/latest"
-c["data_dir"]="/var/lib/nftfp"
+if "xdpforward" in u or "nftforward" in u or u.endswith(".git") or not u:
+    c["update_url"]="https://github.com/gzjacktang/realmforward/releases/latest"
+c["data_dir"]="/var/lib/realmfp"
 c.pop("snat_port_min", None)
 c.pop("snat_port_max", None)
 c.pop("xdp_mode", None)
@@ -146,32 +155,32 @@ if [[ "$NEED_SETUP" == "1" || "$HAS_CERT" != "1" ]]; then
   if [[ "${XFP_NONINTERACTIVE:-0}" == "1" ]]; then
     case "${XFP_TLS_MODE:-selfsigned}" in
       letsencrypt|le)
-        /usr/local/sbin/nftfp-issue-cert letsencrypt "${XFP_DOMAIN:?需要 XFP_DOMAIN}" "${XFP_EMAIL:-}"
+        /usr/local/sbin/realmfp-issue-cert letsencrypt "${XFP_DOMAIN:?需要 XFP_DOMAIN}" "${XFP_EMAIL:-}"
         ;;
       zerossl|zero)
-        /usr/local/sbin/nftfp-issue-cert zerossl "${XFP_DOMAIN:?需要 XFP_DOMAIN}" "${XFP_EMAIL:?ZeroSSL 需要邮箱}"
+        /usr/local/sbin/realmfp-issue-cert zerossl "${XFP_DOMAIN:?需要 XFP_DOMAIN}" "${XFP_EMAIL:?ZeroSSL 需要邮箱}"
         ;;
       *)
-        /usr/local/sbin/nftfp-issue-cert selfsigned "${XFP_DOMAIN:-localhost}"
+        /usr/local/sbin/realmfp-issue-cert selfsigned "${XFP_DOMAIN:-localhost}"
         ;;
     esac
   else
-    /usr/local/sbin/nftfp-issue-cert prompt
+    /usr/local/sbin/realmfp-issue-cert prompt
   fi
 else
-  echo "检测到已有证书，跳过签发（可用 nftfp cert 更换）"
+  echo "检测到已有证书，跳过签发（可用 realmfp cert 更换）"
 fi
 
-cat >/etc/systemd/system/nftfp-update.service <<'EOF'
+cat >/etc/systemd/system/realmfp-update.service <<'EOF'
 [Unit]
-Description=NFT Forward Panel auto update
+Description=Realm Forward Panel auto update
 [Service]
 Type=oneshot
-ExecStart=/usr/local/sbin/nftfp-auto-update
+ExecStart=/usr/local/sbin/realmfp-auto-update
 EOF
-cat >/etc/systemd/system/nftfp-update.timer <<'EOF'
+cat >/etc/systemd/system/realmfp-update.timer <<'EOF'
 [Unit]
-Description=Daily NFT Forward Panel update check
+Description=Daily Realm Forward Panel update check
 [Timer]
 OnCalendar=daily
 Persistent=true
@@ -180,13 +189,13 @@ WantedBy=timers.target
 EOF
 
 systemctl daemon-reload
-systemctl enable nftfp.service
-systemctl enable --now nftfp-update.timer
+systemctl enable realmfp.service
+systemctl enable --now realmfp-update.timer
 ufw allow 2888/tcp >/dev/null 2>&1 || true
 
-systemctl restart nftfp.service || systemctl start nftfp.service
+systemctl restart realmfp.service || systemctl start realmfp.service
 sleep 1
-systemctl --no-pager status nftfp.service || true
+systemctl --no-pager status realmfp.service || true
 
 HOST=$(python3 -c "import json;print(json.load(open('$DATA/config.json')).get('public_host') or '<IP>')")
 MODE=$(python3 -c "import json;print(json.load(open('$DATA/config.json')).get('tls_mode','selfsigned'))")
@@ -194,5 +203,5 @@ echo
 echo "安装完成 · v$VER"
 echo "面板: https://${HOST}:2888"
 echo "证书模式: $MODE"
-echo "首次密码: journalctl -u nftfp -n 80 --no-pager"
-echo "管理命令: nftfp"
+echo "首次密码: journalctl -u realmfp -n 80 --no-pager"
+echo "管理命令: realmfp"

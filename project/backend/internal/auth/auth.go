@@ -10,7 +10,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/gzjacktang/nftforward/internal/store"
+	"github.com/gzjacktang/realmforward/internal/store"
 )
 
 const SessionTTL = 24 * time.Hour

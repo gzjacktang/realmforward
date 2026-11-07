@@ -17,13 +17,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gzjacktang/nftforward/internal/auth"
-	"github.com/gzjacktang/nftforward/internal/config"
-	"github.com/gzjacktang/nftforward/internal/firewall"
-	"github.com/gzjacktang/nftforward/internal/listen"
-	"github.com/gzjacktang/nftforward/internal/store"
-	"github.com/gzjacktang/nftforward/internal/tlsutil"
-	"github.com/gzjacktang/nftforward/internal/fwd"
+	"github.com/gzjacktang/realmforward/internal/auth"
+	"github.com/gzjacktang/realmforward/internal/config"
+	"github.com/gzjacktang/realmforward/internal/firewall"
+	"github.com/gzjacktang/realmforward/internal/listen"
+	"github.com/gzjacktang/realmforward/internal/store"
+	"github.com/gzjacktang/realmforward/internal/tlsutil"
+	"github.com/gzjacktang/realmforward/internal/fwd"
 )
 
 type Server struct {
@@ -812,7 +812,7 @@ func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"ok": true, "note": "面板将在约 1 秒后重启"})
 	go func() {
 		time.Sleep(800 * time.Millisecond)
-		_ = exec.Command("systemctl", "restart", "nftfp.service").Run()
+		_ = exec.Command("systemctl", "restart", "realmfp.service").Run()
 	}()
 }
 
@@ -824,7 +824,7 @@ func (s *Server) handleTLSRegen(w http.ResponseWriter, r *http.Request) {
 	cfg := s.Cfg.Get()
 	if strings.EqualFold(cfg.TLSMode, "letsencrypt") || strings.EqualFold(cfg.TLSMode, "le") ||
 		strings.EqualFold(cfg.TLSMode, "zerossl") || strings.EqualFold(cfg.TLSMode, "zero") {
-		writeErr(w, 400, "当前为公共 CA 证书，请用「安装证书」或服务器执行: nftfp cert")
+		writeErr(w, 400, "当前为公共 CA 证书，请用「安装证书」或服务器执行: realmfp cert")
 		return
 	}
 	// only regenerate local self-signed files under data dir
@@ -869,9 +869,9 @@ func (s *Server) handleTLSIssue(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "ZeroSSL 需要填写邮箱")
 		return
 	}
-	script := "/usr/local/sbin/nftfp-issue-cert"
+	script := "/usr/local/sbin/realmfp-issue-cert"
 	if _, err := os.Stat(script); err != nil {
-		writeErr(w, 500, "证书脚本不存在，请在服务器运行: nftfp cert")
+		writeErr(w, 500, "证书脚本不存在，请在服务器运行: realmfp cert")
 		return
 	}
 	args := []string{mode, domain, body.Email}
@@ -881,7 +881,7 @@ func (s *Server) handleTLSIssue(w http.ResponseWriter, r *http.Request) {
 		cmd := exec.Command(script, args...)
 		_ = cmd.Run()
 		time.Sleep(500 * time.Millisecond)
-		_ = exec.Command("systemctl", "restart", "nftfp.service").Run()
+		_ = exec.Command("systemctl", "restart", "realmfp.service").Run()
 	}()
 }
 
@@ -915,17 +915,17 @@ func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	helper := "/usr/local/sbin/nftfp-do-update"
+	helper := "/usr/local/sbin/realmfp-do-update"
 	if _, err := os.Stat(helper); err != nil {
-		// fallback: still avoid cgroup kill via systemd-run + nftfp
-		helper = "/usr/local/bin/nftfp"
+		// fallback: still avoid cgroup kill via systemd-run + realmfp
+		helper = "/usr/local/bin/realmfp"
 	}
 
 	_ = s.Store.AddAudit("web", "admin", "panel.update", "ok", body.Tag)
 	// Start outside the panel cgroup — otherwise systemctl restart kills the updater.
-	_ = exec.Command("systemctl", "reset-failed", "nftfp-manual-update.service").Run()
-	args := []string{"--unit=nftfp-manual-update", "--collect", "--no-block", helper}
-	if helper == "/usr/local/sbin/nftfp-do-update" {
+	_ = exec.Command("systemctl", "reset-failed", "realmfp-manual-update.service").Run()
+	args := []string{"--unit=realmfp-manual-update", "--collect", "--no-block", helper}
+	if helper == "/usr/local/sbin/realmfp-do-update" {
 		if body.Tag != "" {
 			args = append(args, body.Tag)
 		}
@@ -941,12 +941,12 @@ func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// last-resort: nohup detached (also outside panel restart cgroup kill if already forked)
 		script := helper
-		if helper == "/usr/local/bin/nftfp" {
+		if helper == "/usr/local/bin/realmfp" {
 			script = helper + " update " + shellQuote(body.Tag)
 		} else if body.Tag != "" {
 			script = helper + " " + shellQuote(body.Tag)
 		}
-		nohup := exec.Command("bash", "-c", "nohup "+script+" >>/var/lib/nftfp/update.log 2>&1 &")
+		nohup := exec.Command("bash", "-c", "nohup "+script+" >>/var/lib/realmfp/update.log 2>&1 &")
 		_ = nohup.Start()
 		writeJSON(w, map[string]any{
 			"ok":      true,
@@ -977,7 +977,7 @@ func normalizeVer(v string) string {
 }
 
 func readInstalledVersion() string {
-	b, err := os.ReadFile("/opt/nftfp/VERSION")
+	b, err := os.ReadFile("/opt/realmfp/VERSION")
 	if err != nil {
 		return ""
 	}
@@ -986,7 +986,7 @@ func readInstalledVersion() string {
 
 func fetchLatestReleaseTag() (string, string) {
 	client := &http.Client{Timeout: 8 * time.Second}
-	req, err := http.NewRequest(http.MethodGet, "https://api.github.com/repos/gzjacktang/nftforward/releases/latest", nil)
+	req, err := http.NewRequest(http.MethodGet, "https://api.github.com/repos/gzjacktang/realmforward/releases/latest", nil)
 	if err != nil {
 		return "", err.Error()
 	}
@@ -1055,21 +1055,21 @@ func (s *Server) handleUninstall(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		time.Sleep(800 * time.Millisecond)
 		script := `set -e
-systemctl stop nftfp.service 2>/dev/null || true
-systemctl disable nftfp.service 2>/dev/null || true
+systemctl stop realmfp.service 2>/dev/null || true
+systemctl disable realmfp.service 2>/dev/null || true
 pkill -x realm 2>/dev/null || true
 nft delete table ip nftfp 2>/dev/null || true
-systemctl stop nftfp-update.timer 2>/dev/null || true
-systemctl disable nftfp-update.timer 2>/dev/null || true
-rm -f /etc/systemd/system/nftfp.service /etc/systemd/system/nftfp-update.service /etc/systemd/system/nftfp-update.timer
+systemctl stop realmfp-update.timer 2>/dev/null || true
+systemctl disable realmfp-update.timer 2>/dev/null || true
+rm -f /etc/systemd/system/realmfp.service /etc/systemd/system/realmfp-update.service /etc/systemd/system/realmfp-update.timer
 systemctl daemon-reload
-rm -f /usr/local/bin/nft-panel /usr/local/bin/nftfp /usr/local/bin/realm
-		rm -f /usr/local/sbin/nftfp-issue-cert /usr/local/sbin/nftfp-auto-update /usr/local/sbin/nftfp-do-update
-rm -rf /usr/lib/nftfp /usr/share/nftfp /opt/nftfp
+rm -f /usr/local/bin/realm-panel /usr/local/bin/realmfp /usr/local/bin/realm
+		rm -f /usr/local/sbin/realmfp-issue-cert /usr/local/sbin/realmfp-auto-update /usr/local/sbin/realmfp-do-update
+rm -rf /usr/lib/realmfp /usr/share/realmfp /opt/realmfp
 `
 		// Default wipe: clearing config/db/certs so reinstall shows setup again.
 		if body.WipeData {
-			script += "rm -rf /var/lib/nftfp\n"
+			script += "rm -rf /var/lib/realmfp\n"
 		}
 		_ = exec.Command("bash", "-c", script).Run()
 	}()

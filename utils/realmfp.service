@@ -1,11 +1,11 @@
 [Unit]
-Description=NFT Forward Panel (Realm)
+Description=Realm Forward Panel
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/nft-panel -data /var/lib/nftfp -web /usr/share/nftfp/web -realm /usr/lib/nftfp/realm
+ExecStart=/usr/local/bin/realm-panel -data /var/lib/realmfp -web /usr/share/realmfp/web -realm /usr/lib/realmfp/realm
 Restart=on-failure
 RestartSec=3
 LimitNOFILE=1048576
