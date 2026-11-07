@@ -28,8 +28,8 @@ type Config struct {
 	TGAdminIDs   []int64 `json:"tg_admin_ids"`
 	TGEnabled    bool    `json:"tg_enabled"`
 	XDPMode      string  `json:"xdp_mode"` // auto|native|generic
-	CsumSafe     bool    `json:"csum_safe"` // true → BPF full TCP recompute (slower, virtio-safe)
-	CsumFast     bool    `json:"csum_fast,omitempty"` // legacy; ignored if csum_safe set via UI
+	CsumSafe     bool    `json:"csum_safe"` // true → always full TCP recompute
+	CsumFast     bool    `json:"csum_fast,omitempty"` // legacy
 	PanelVersion string  `json:"-"`
 	BPFVersion   string  `json:"-"`
 }
@@ -53,6 +53,8 @@ func Default(dataDir string) *Config {
 		TGAdminIDs:  nil,
 		TGEnabled:   false,
 		XDPMode:     "auto",
+		// Default safe until incremental is proven on the box; UI can turn off.
+		CsumSafe:     true,
 		PanelVersion: version.Version,
 		BPFVersion:   version.BPFVersion,
 	}

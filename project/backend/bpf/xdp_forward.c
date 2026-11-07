@@ -124,27 +124,34 @@ static __always_inline __sum16 csum_fold_helper(__wsum csum)
 }
 
 /*
- * RFC1624 incremental update in host-numeric space (ntohs/htons).
- * Do NOT bpf_csum_diff stack __be32 on LE — spilled bytes are swapped vs wire.
+ * RFC1624 incremental update.
+ * Must match recompute_ipv4_l4 / csum_fold_helper storage: write __sum16 as the
+ * raw folded value (NO ntohs/htons on *sum). Mixing htons here made "fast"
+ * mode corrupt TCP csums → retransmits → slower than full recompute.
+ * Address/port args are __be* field values; convert with ntohl/ntohs for math.
  */
-static __always_inline void csum_replace4(__sum16 *sum, __be32 from, __be32 to)
-{
-	__u32 sum32 = ~(__u32)bpf_ntohs(*(__be16 *)sum) & 0xffff;
-	sum32 += (~bpf_ntohl(from) & 0xffff) + (~(bpf_ntohl(from) >> 16) & 0xffff);
-	sum32 += (bpf_ntohl(to) & 0xffff) + ((bpf_ntohl(to) >> 16) & 0xffff);
-	sum32 = (sum32 & 0xffff) + (sum32 >> 16);
-	sum32 = (sum32 & 0xffff) + (sum32 >> 16);
-	*(__be16 *)sum = bpf_htons(~sum32 & 0xffff);
-}
-
 static __always_inline void csum_replace2(__sum16 *sum, __be16 from, __be16 to)
 {
-	__u32 sum32 = ~(__u32)bpf_ntohs(*(__be16 *)sum) & 0xffff;
-	sum32 += (~bpf_ntohs(from) & 0xffff);
-	sum32 += (bpf_ntohs(to) & 0xffff);
+	__u32 sum32 = ~((__u32)(__u16)*sum) & 0xffff;
+	sum32 += (~bpf_ntohs(from)) & 0xffff;
+	sum32 += bpf_ntohs(to) & 0xffff;
 	sum32 = (sum32 & 0xffff) + (sum32 >> 16);
 	sum32 = (sum32 & 0xffff) + (sum32 >> 16);
-	*(__be16 *)sum = bpf_htons(~sum32 & 0xffff);
+	*sum = (__sum16)(~sum32 & 0xffff);
+}
+
+static __always_inline void csum_replace4(__sum16 *sum, __be32 from, __be32 to)
+{
+	__u32 sum32 = ~((__u32)(__u16)*sum) & 0xffff;
+	__u32 fold_from = bpf_ntohl(from);
+	__u32 fold_to = bpf_ntohl(to);
+	sum32 += (~fold_from) & 0xffff;
+	sum32 += (~(fold_from >> 16)) & 0xffff;
+	sum32 += fold_to & 0xffff;
+	sum32 += (fold_to >> 16) & 0xffff;
+	sum32 = (sum32 & 0xffff) + (sum32 >> 16);
+	sum32 = (sum32 & 0xffff) + (sum32 >> 16);
+	*sum = (__sum16)(~sum32 & 0xffff);
 }
 
 /* Full TCP/UDP recompute via scratch (verifier-safe). Used for virtio / NEEDS_CSUM. */

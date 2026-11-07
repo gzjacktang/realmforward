@@ -515,7 +515,7 @@ async function renderSettings(el) {
           <button type="button" class="toggle ${s.auto_update ? "on" : ""}" id="au"></button></div>
         <div class="field"><label>兼容校验</label>
           <button type="button" class="toggle ${s.csum_safe ? "on" : ""}" id="csum-safe"></button>
-          <p class="hint" style="margin:6px 0 0">默认关闭（增量校验，速度优先）。若出现断流/RST 再开启——会强制整包重算，更稳但更慢。</p></div>
+          <p class="hint" style="margin:6px 0 0">默认开启（整包重算，更稳）。关掉后走增量校验（修过字节序）；若关掉后变慢/重传，请保持开启并反馈。</p></div>
         <div class="field"><label>更新地址</label><input id="upd" class="mono" value="${esc(s.update_url || "https://github.com/gzjacktang/xdpforward/releases/latest")}" /></div>
         <div style="display:flex;flex-wrap:wrap;gap:8px">
           <button class="btn btn-primary" id="do-update">${s.update_available ? "立即更新到最新" : "检查并更新"}</button>
