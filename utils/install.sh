@@ -80,6 +80,28 @@ if [[ "$REPO_ROOT" != /opt/xdp-forward-panel ]]; then
     || cp -a "$REPO_ROOT"/. /opt/xdp-forward-panel/
 fi
 
+NEED_SETUP=0
+if [[ "${XFP_FORCE_SETUP:-0}" == "1" ]]; then
+  rm -rf "$DATA"
+  mkdir -p "$DATA"
+  NEED_SETUP=1
+elif [[ -f "$DATA/config.json" || -f "$DATA/panel.db" || -d "$DATA/tls" ]]; then
+  if [[ "${XFP_KEEP_DATA:-0}" == "1" || "${XFP_NONINTERACTIVE:-0}" == "1" ]]; then
+    echo "保留已有数据目录 $DATA"
+  else
+    echo "检测到旧配置：$DATA"
+    read -r -p "是否清空并重新配置？[Y/n]: " _wipe
+    _wipe="${_wipe:-Y}"
+    if [[ ! "$_wipe" =~ ^[Nn] ]]; then
+      rm -rf "$DATA"
+      mkdir -p "$DATA"
+      NEED_SETUP=1
+    fi
+  fi
+else
+  NEED_SETUP=1
+fi
+
 if [[ ! -f "$DATA/config.json" ]]; then
   cat >"$DATA/config.json" <<EOF
 {
@@ -107,22 +129,28 @@ fi
 
 echo
 echo "======== TLS 证书 ========"
+HAS_CERT=0
 if [[ -f "$DATA/tls/cert.pem" || -f "$DATA/tls/fullchain.pem" ]] || compgen -G "/etc/letsencrypt/live/*/fullchain.pem" >/dev/null; then
-  echo "检测到已有证书，跳过签发（可用 xdp cert 更换）"
-elif [[ "${XFP_NONINTERACTIVE:-0}" == "1" ]]; then
-  case "${XFP_TLS_MODE:-selfsigned}" in
-    letsencrypt|le)
-      /usr/local/sbin/xdp-panel-issue-cert letsencrypt "${XFP_DOMAIN:?需要 XFP_DOMAIN}" "${XFP_EMAIL:-}"
-      ;;
-    zerossl|zero)
-      /usr/local/sbin/xdp-panel-issue-cert zerossl "${XFP_DOMAIN:?需要 XFP_DOMAIN}" "${XFP_EMAIL:?ZeroSSL 需要邮箱}"
-      ;;
-    *)
-      /usr/local/sbin/xdp-panel-issue-cert selfsigned "${XFP_DOMAIN:-localhost}"
-      ;;
-  esac
+  HAS_CERT=1
+fi
+if [[ "$NEED_SETUP" == "1" || "$HAS_CERT" != "1" ]]; then
+  if [[ "${XFP_NONINTERACTIVE:-0}" == "1" ]]; then
+    case "${XFP_TLS_MODE:-selfsigned}" in
+      letsencrypt|le)
+        /usr/local/sbin/xdp-panel-issue-cert letsencrypt "${XFP_DOMAIN:?需要 XFP_DOMAIN}" "${XFP_EMAIL:-}"
+        ;;
+      zerossl|zero)
+        /usr/local/sbin/xdp-panel-issue-cert zerossl "${XFP_DOMAIN:?需要 XFP_DOMAIN}" "${XFP_EMAIL:?ZeroSSL 需要邮箱}"
+        ;;
+      *)
+        /usr/local/sbin/xdp-panel-issue-cert selfsigned "${XFP_DOMAIN:-localhost}"
+        ;;
+    esac
+  else
+    /usr/local/sbin/xdp-panel-issue-cert prompt
+  fi
 else
-  /usr/local/sbin/xdp-panel-issue-cert prompt
+  echo "检测到已有证书，跳过签发（可用 xdp cert 更换）"
 fi
 
 install -m 0644 "$REPO_ROOT/utils/xdp-forward-panel.service" /etc/systemd/system/xdp-forward-panel.service

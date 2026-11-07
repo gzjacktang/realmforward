@@ -24,6 +24,8 @@ fi
 #   XFP_EMAIL=...
 #   XFP_IFACE=...
 #   XFP_NONINTERACTIVE=1
+#   XFP_KEEP_DATA=1          # 更新时保留数据，跳过清空询问
+#   XFP_FORCE_SETUP=1        # 强制清空数据并重新进入证书配置
 
 if [[ "$(id -u)" -ne 0 ]]; then
   echo "请使用 root 运行" >&2
@@ -65,6 +67,38 @@ cp -a "$PKG_ROOT/." /opt/xdp-forward-panel/release/ 2>/dev/null \
   || { mkdir -p /opt/xdp-forward-panel/release && cp -a "$PKG_ROOT"/. /opt/xdp-forward-panel/release/; }
 echo "$VER" >/opt/xdp-forward-panel/VERSION
 
+NEED_SETUP=0
+HAS_OLD=0
+if [[ -f "$DATA/config.json" || -f "$DATA/panel.db" || -d "$DATA/tls" ]]; then
+  HAS_OLD=1
+fi
+
+if [[ "${XFP_FORCE_SETUP:-0}" == "1" ]]; then
+  echo "XFP_FORCE_SETUP=1：清空 $DATA 并重新配置"
+  rm -rf "$DATA"
+  mkdir -p "$DATA"
+  NEED_SETUP=1
+elif [[ "$HAS_OLD" == "1" ]]; then
+  if [[ "${XFP_KEEP_DATA:-0}" == "1" || "${XFP_NONINTERACTIVE:-0}" == "1" ]]; then
+    echo "保留已有数据目录 $DATA"
+  else
+    echo
+    echo "检测到旧配置/数据库/证书：$DATA"
+    read -r -p "是否清空并重新进入安装配置？[Y/n]: " wipe_old
+    wipe_old="${wipe_old:-Y}"
+    if [[ ! "$wipe_old" =~ ^[Nn] ]]; then
+      rm -rf "$DATA"
+      mkdir -p "$DATA"
+      NEED_SETUP=1
+      echo "已清空，将重新配置"
+    else
+      echo "保留旧数据（证书配置将跳过）"
+    fi
+  fi
+else
+  NEED_SETUP=1
+fi
+
 if [[ ! -f "$DATA/config.json" ]]; then
   cat >"$DATA/config.json" <<EOF
 {
@@ -103,22 +137,29 @@ fi
 
 echo
 echo "======== TLS 证书 ========"
+HAS_CERT=0
 if [[ -f "$DATA/tls/cert.pem" || -f "$DATA/tls/fullchain.pem" ]] || compgen -G "/etc/letsencrypt/live/*/fullchain.pem" >/dev/null; then
-  echo "检测到已有证书，跳过签发（可用 xdp cert 更换）"
-elif [[ "${XFP_NONINTERACTIVE:-0}" == "1" ]]; then
-  case "${XFP_TLS_MODE:-selfsigned}" in
-    letsencrypt|le)
-      /usr/local/sbin/xdp-panel-issue-cert letsencrypt "${XFP_DOMAIN:?需要 XFP_DOMAIN}" "${XFP_EMAIL:-}"
-      ;;
-    zerossl|zero)
-      /usr/local/sbin/xdp-panel-issue-cert zerossl "${XFP_DOMAIN:?需要 XFP_DOMAIN}" "${XFP_EMAIL:?ZeroSSL 需要邮箱}"
-      ;;
-    *)
-      /usr/local/sbin/xdp-panel-issue-cert selfsigned "${XFP_DOMAIN:-localhost}"
-      ;;
-  esac
+  HAS_CERT=1
+fi
+
+if [[ "$NEED_SETUP" == "1" || "$HAS_CERT" != "1" ]]; then
+  if [[ "${XFP_NONINTERACTIVE:-0}" == "1" ]]; then
+    case "${XFP_TLS_MODE:-selfsigned}" in
+      letsencrypt|le)
+        /usr/local/sbin/xdp-panel-issue-cert letsencrypt "${XFP_DOMAIN:?需要 XFP_DOMAIN}" "${XFP_EMAIL:-}"
+        ;;
+      zerossl|zero)
+        /usr/local/sbin/xdp-panel-issue-cert zerossl "${XFP_DOMAIN:?需要 XFP_DOMAIN}" "${XFP_EMAIL:?ZeroSSL 需要邮箱}"
+        ;;
+      *)
+        /usr/local/sbin/xdp-panel-issue-cert selfsigned "${XFP_DOMAIN:-localhost}"
+        ;;
+    esac
+  else
+    /usr/local/sbin/xdp-panel-issue-cert prompt
+  fi
 else
-  /usr/local/sbin/xdp-panel-issue-cert prompt
+  echo "检测到已有证书，跳过签发（可用 xdp cert 更换）"
 fi
 
 cat >/etc/systemd/system/xdp-panel-update.service <<'EOF'

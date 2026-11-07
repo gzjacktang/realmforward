@@ -22,6 +22,10 @@
 #define BPF_FIB_LOOKUP_DIRECT (1U << 0)
 #endif
 
+/* Pin classic helper ID 189 so CI Ubuntu headers cannot emit unresolved kfunc. */
+static long (*const xfp_xdp_load_bytes)(struct xdp_md *xdp_md, __u32 offset, void *buf, __u32 len) = (void *)189;
+#define bpf_xdp_load_bytes xfp_xdp_load_bytes
+
 #define MAX_RULES 256
 #define MAX_CT    65536
 
@@ -104,6 +108,13 @@ struct {
 	__type(value, struct config_val);
 } config SEC(".maps");
 
+struct {
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, __u8[1504]);
+} scratch SEC(".maps");
+
 /* Fold like kernel csum_fold(). */
 static __always_inline __sum16 csum_fold_helper(__wsum csum)
 {
@@ -136,7 +147,7 @@ static __always_inline void csum_replace2(__sum16 *sum, __be16 from, __be16 to)
 	*(__be16 *)sum = bpf_htons(~sum32 & 0xffff);
 }
 
-/* Full TCP/UDP recompute in-place (no scratch copy) for virtio / NEEDS_CSUM. */
+/* Full TCP/UDP recompute via scratch (verifier-safe). Used for virtio / NEEDS_CSUM. */
 static __always_inline void recompute_ipv4_l4(struct xdp_md *ctx, struct iphdr *iph,
 					     __sum16 *csum_field, __u8 proto)
 {
@@ -147,66 +158,69 @@ static __always_inline void recompute_ipv4_l4(struct xdp_md *ctx, struct iphdr *
 	if (l4_len < 8 || l4_len > 1480)
 		return;
 
+	void *data = (void *)(long)ctx->data;
 	void *data_end = (void *)(long)ctx->data_end;
-	__u8 *l4 = (__u8 *)(iph + 1);
-	if ((void *)(l4 + 8) > data_end)
+	__u32 l4_off = sizeof(struct ethhdr) + sizeof(struct iphdr);
+	__u8 *l4 = (__u8 *)data + l4_off;
+	if (l4 >= (__u8 *)data_end)
 		return;
-	if ((void *)(l4 + l4_len) > data_end)
-		return; /* refuse partial — safer than wrong csum */
+	__u32 avail = (__u32)((__u8 *)data_end - l4);
+	if (l4_len > avail)
+		return; /* refuse partial recompute — safer than wrong csum */
 
-	*csum_field = 0;
+	__u32 zero = 0;
+	__u8 *buf = bpf_map_lookup_elem(&scratch, &zero);
+	if (!buf)
+		return;
+	if (bpf_xdp_load_bytes(ctx, l4_off, buf, l4_len) < 0)
+		return;
 
+	if (proto == IPPROTO_TCP && l4_len >= 18) {
+		buf[16] = 0;
+		buf[17] = 0;
+	} else if (proto == IPPROTO_UDP && l4_len >= 8) {
+		buf[6] = 0;
+		buf[7] = 0;
+	}
+
+	__u32 rounded = (l4_len + 3) & ~3u;
+	if (rounded > 1480)
+		rounded = 1480;
+	if (rounded > l4_len) {
+		buf[l4_len] = 0;
+		if (l4_len + 1 < 1480)
+			buf[l4_len + 1] = 0;
+		if (l4_len + 2 < 1480)
+			buf[l4_len + 2] = 0;
+	}
+
+	/* Pseudo-header from packet memory (wire order) + proto/len bytes. */
 	__wsum csum = bpf_csum_diff(NULL, 0, &iph->saddr, 8, 0);
 	__u8 plen[4] = { 0, proto, (__u8)(l4_len >> 8), (__u8)l4_len };
 	csum = bpf_csum_diff(NULL, 0, (__be32 *)plen, 4, csum);
 
-	__u32 aligned = l4_len & ~3u;
 	__u32 off = 0;
 #pragma unroll
 	for (int i = 0; i < 23; i++) {
-		if (off + 64 > aligned)
+		if (off + 64 > rounded)
 			break;
-		if ((void *)(l4 + off + 64) > data_end)
-			return;
-		csum = bpf_csum_diff(NULL, 0, (__be32 *)(l4 + off), 64, csum);
+		csum = bpf_csum_diff(NULL, 0, (__be32 *)(buf + off), 64, csum);
 		off += 64;
 	}
-	if (off + 32 <= aligned) {
-		if ((void *)(l4 + off + 32) > data_end)
-			return;
-		csum = bpf_csum_diff(NULL, 0, (__be32 *)(l4 + off), 32, csum);
+	if (off + 32 <= rounded) {
+		csum = bpf_csum_diff(NULL, 0, (__be32 *)(buf + off), 32, csum);
 		off += 32;
 	}
-	if (off + 16 <= aligned) {
-		if ((void *)(l4 + off + 16) > data_end)
-			return;
-		csum = bpf_csum_diff(NULL, 0, (__be32 *)(l4 + off), 16, csum);
+	if (off + 16 <= rounded) {
+		csum = bpf_csum_diff(NULL, 0, (__be32 *)(buf + off), 16, csum);
 		off += 16;
 	}
-	if (off + 8 <= aligned) {
-		if ((void *)(l4 + off + 8) > data_end)
-			return;
-		csum = bpf_csum_diff(NULL, 0, (__be32 *)(l4 + off), 8, csum);
+	if (off + 8 <= rounded) {
+		csum = bpf_csum_diff(NULL, 0, (__be32 *)(buf + off), 8, csum);
 		off += 8;
 	}
-	if (off + 4 <= aligned) {
-		if ((void *)(l4 + off + 4) > data_end)
-			return;
-		csum = bpf_csum_diff(NULL, 0, (__be32 *)(l4 + off), 4, csum);
-	}
-
-	__u32 rem = l4_len - aligned;
-	if (rem) {
-		__u8 tail[4] = {};
-		if ((void *)(l4 + aligned + rem) > data_end)
-			return;
-#pragma unroll
-		for (int i = 0; i < 3; i++) {
-			if (i < rem)
-				tail[i] = l4[aligned + i];
-		}
-		csum = bpf_csum_diff(NULL, 0, (__be32 *)tail, 4, csum);
-	}
+	if (off + 4 <= rounded)
+		csum = bpf_csum_diff(NULL, 0, (__be32 *)(buf + off), 4, csum);
 
 	__sum16 folded = csum_fold_helper(csum);
 	if (proto == IPPROTO_UDP && folded == 0)

@@ -57,4 +57,5 @@ if [[ ! -x "$ROOT/bin/xdp-panel" ]]; then
 fi
 [[ -x "$ROOT/bin/xdp-panel" ]] || { echo "解压后找不到 bin/xdp-panel" >&2; exit 1; }
 
-bash "$ROOT/utils/install-release.sh"
+# 全新一键安装：允许交互清空旧数据并进入证书配置；更新请用 xdp update
+XFP_KEEP_DATA="${XFP_KEEP_DATA:-0}" bash "$ROOT/utils/install-release.sh"

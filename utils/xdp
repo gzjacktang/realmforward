@@ -123,12 +123,14 @@ cmd_restart() { need_root; systemctl restart "$SERVICE"; grn "已重启"; sleep 
 cmd_install() {
   need_root
   if [[ -n "${XFP_INSTALL_SRC:-}" && -f "${XFP_INSTALL_SRC}/utils/install-release.sh" ]]; then
-    bash "${XFP_INSTALL_SRC}/utils/install-release.sh"
+    XFP_KEEP_DATA="${XFP_KEEP_DATA:-0}" bash "${XFP_INSTALL_SRC}/utils/install-release.sh"
     return
   fi
   bold "从 GitHub Releases 安装…"
   fetch_release_pkg
-  XFP_NONINTERACTIVE="${XFP_NONINTERACTIVE:-0}" bash "$_XFP_ROOT/utils/install-release.sh"
+  XFP_NONINTERACTIVE="${XFP_NONINTERACTIVE:-0}" \
+    XFP_KEEP_DATA="${XFP_KEEP_DATA:-0}" \
+    bash "$_XFP_ROOT/utils/install-release.sh"
   rm -rf "$_XFP_TMP"
   grn "CLI: xdp"
 }
@@ -138,6 +140,7 @@ cmd_update() {
   bold "从 GitHub Releases 更新…"
   fetch_release_pkg "${1:-}"
   XFP_NONINTERACTIVE=1 \
+    XFP_KEEP_DATA=1 \
     XFP_TLS_MODE="$(cfg_get tls_mode selfsigned)" \
     XFP_DOMAIN="$(cfg_get public_host)" \
     XFP_EMAIL="$(cfg_get acme_email)" \
@@ -151,9 +154,15 @@ cmd_update() {
 cmd_uninstall() {
   need_root
   echo
-  ylw "将卸载面板服务、二进制与前端；默认保留 $DATA（配置/数据库/证书）。"
+  ylw "将卸载面板服务、二进制与前端，并默认删除配置/数据库/证书（$DATA）。"
   read -r -p "确认卸载？输入 yes 继续: " ans
   [[ "$ans" == "yes" ]] || { echo "已取消"; return 0; }
+  local wipe="yes"
+  read -r -p "删除数据目录 $DATA ？[Y/n]: " wipe_ans
+  wipe_ans="${wipe_ans:-Y}"
+  if [[ "$wipe_ans" =~ ^[Nn] ]]; then
+    wipe="no"
+  fi
   systemctl stop "$SERVICE" 2>/dev/null || true
   systemctl disable "$SERVICE" 2>/dev/null || true
   systemctl stop xdp-panel-update.timer 2>/dev/null || true
@@ -163,19 +172,15 @@ cmd_uninstall() {
   rm -f /etc/systemd/system/xdp-panel-update.timer
   systemctl daemon-reload
   rm -f /usr/local/bin/xdp-panel /usr/local/bin/xdp
-  rm -f /usr/local/sbin/xdp-panel-issue-cert /usr/local/sbin/xdp-panel-auto-update
+  rm -f /usr/local/sbin/xdp-panel-issue-cert /usr/local/sbin/xdp-panel-auto-update /usr/local/sbin/xdp-panel-do-update
   rm -rf "$LIBDIR" "$SHARE"
-  read -r -p "是否同时删除数据目录 $DATA ？(yes/N): " wipe
   if [[ "$wipe" == "yes" ]]; then
     rm -rf "$DATA"
     ylw "已删除 $DATA"
   else
-    echo "已保留 $DATA"
+    echo "已保留 $DATA（下次安装会询问是否清空并重新配置）"
   fi
-  read -r -p "是否删除缓存目录 /opt/xdp-forward-panel ？(yes/N): " wipe2
-  if [[ "$wipe2" == "yes" ]]; then
-    rm -rf /opt/xdp-forward-panel
-  fi
+  rm -rf /opt/xdp-forward-panel
   grn "卸载完成"
 }
 

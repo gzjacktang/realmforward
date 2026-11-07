@@ -565,10 +565,10 @@ async function renderSettings(el) {
       <p class="hint" id="acc-hint">可只改用户名；改密码需当前密码 + 新密码。VPS: <span class="mono">xdp passwd</span></p>
     </div></div>
     <div class="panel" style="margin-top:14px"><div class="panel-h"><h3>危险操作</h3></div><div class="form-box">
-      <p class="hint">卸载将停止服务并删除程序文件；可选是否删除数据目录。</p>
+      <p class="hint">卸载将停止服务并删除程序；默认同时删除配置/数据库/证书，否则下次安装会沿用旧配置并跳过证书向导。</p>
       <div class="field"><label>确认语（请输入 UNINSTALL）</label><input id="uninst-confirm" class="mono" placeholder="UNINSTALL" /></div>
-      <div class="field"><label>同时删除数据</label>
-        <button type="button" class="toggle" id="uninst-wipe"></button></div>
+      <div class="field"><label>同时删除数据（推荐）</label>
+        <button type="button" class="toggle on" id="uninst-wipe"></button></div>
       <button class="btn btn-warn" id="do-uninstall">卸载面板</button>
     </div></div>`;
   document.getElementById("au").onclick = function () { this.classList.toggle("on"); };

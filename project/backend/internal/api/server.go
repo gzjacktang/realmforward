@@ -1076,9 +1076,10 @@ systemctl disable xdp-panel-update.timer 2>/dev/null || true
 rm -f /etc/systemd/system/xdp-forward-panel.service /etc/systemd/system/xdp-panel-update.service /etc/systemd/system/xdp-panel-update.timer
 systemctl daemon-reload
 rm -f /usr/local/bin/xdp-panel /usr/local/bin/xdp
-rm -f /usr/local/sbin/xdp-panel-issue-cert /usr/local/sbin/xdp-panel-auto-update
-rm -rf /usr/lib/xdp-forward-panel /usr/share/xdp-forward-panel
+		rm -f /usr/local/sbin/xdp-panel-issue-cert /usr/local/sbin/xdp-panel-auto-update /usr/local/sbin/xdp-panel-do-update
+rm -rf /usr/lib/xdp-forward-panel /usr/share/xdp-forward-panel /opt/xdp-forward-panel
 `
+		// Default wipe: clearing config/db/certs so reinstall shows setup again.
 		if body.WipeData {
 			script += "rm -rf /var/lib/xdp-forward-panel\n"
 		}
