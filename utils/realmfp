@@ -247,7 +247,7 @@ cmd_menu() {
   need_root
   while true; do
     echo
-    bold "======== NFT 控制面板 ========"
+    bold "======== Realm 控制面板 ========"
     echo "  1) 状态"
     echo "  2) 启动"
     echo "  3) 停止"
