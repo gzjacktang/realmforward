@@ -104,7 +104,7 @@ cmd_status() {
   ver="$(tr -d '[:space:]' </opt/nftfp/VERSION 2>/dev/null || echo "?")"
   echo "版本: v${ver}"
   echo "面板: https://${host}:${port}${base}/"
-  echo "证书: $(cfg_get tls_mode selfsigned) · 
+  echo "证书: $(cfg_get tls_mode selfsigned)"
   if [[ -x /usr/local/bin/nft-panel ]]; then
     echo "二进制: /usr/local/bin/nft-panel"
   fi
@@ -222,18 +222,18 @@ PY
 
 cmd_cert() {
   need_root
-  if [[ ! -x /usr/local/sbin/nft-panel-issue-cert ]]; then
+  if [[ ! -x /usr/local/sbin/nftfp-issue-cert ]]; then
     if [[ -f "$RELEASE_CACHE/utils/issue-cert.sh" ]]; then
-      install -m 0755 "$RELEASE_CACHE/utils/issue-cert.sh" /usr/local/sbin/nft-panel-issue-cert
+      install -m 0755 "$RELEASE_CACHE/utils/issue-cert.sh" /usr/local/sbin/nftfp-issue-cert
     else
       red "找不到 issue-cert 脚本，请先 nftfp install / nftfp update"
       exit 1
     fi
   fi
   if [[ "${1:-}" == "prompt" || -z "${1:-}" ]]; then
-    /usr/local/sbin/nft-panel-issue-cert prompt
+    /usr/local/sbin/nftfp-issue-cert prompt
   else
-    /usr/local/sbin/nft-panel-issue-cert "$@"
+    /usr/local/sbin/nftfp-issue-cert "$@"
   fi
   systemctl restart "$SERVICE" 2>/dev/null || true
   grn "证书流程结束（已尝试重启服务）"
