@@ -197,11 +197,35 @@ systemctl restart realmfp.service || systemctl start realmfp.service
 sleep 1
 systemctl --no-pager status realmfp.service || true
 
-HOST=$(python3 -c "import json;print(json.load(open('$DATA/config.json')).get('public_host') or '<IP>')")
+# Prefer configured host; fall back to detected public IPv4 (never print localhost).
+HOST=$(python3 - <<'PY'
+import json,urllib.request
+c=json.load(open("/var/lib/realmfp/config.json"))
+h=(c.get("public_host") or "").strip()
+if h and h not in ("localhost","127.0.0.1"):
+    print(h); raise SystemExit
+for url in ("https://ifconfig.me","https://api.ipify.org"):
+    try:
+        print(urllib.request.urlopen(url, timeout=2).read().decode().strip()); raise SystemExit
+    except Exception:
+        pass
+print("<服务器公网IP>")
+PY
+)
 MODE=$(python3 -c "import json;print(json.load(open('$DATA/config.json')).get('tls_mode','selfsigned'))")
+# Clear leftover localhost public_host so status/UI stay usable.
+python3 - <<'PY' || true
+import json
+p="/var/lib/realmfp/config.json"
+c=json.load(open(p))
+if c.get("public_host") in ("localhost","127.0.0.1"):
+    c["public_host"]=""
+    json.dump(c, open(p,"w"), indent=2, ensure_ascii=False)
+PY
 echo
 echo "安装完成 · v$VER"
-echo "面板: https://${HOST}:2888"
-echo "证书模式: $MODE"
-echo "首次密码: journalctl -u realmfp -n 80 --no-pager"
+echo "面板: https://${HOST}:2888/"
+echo "证书模式: $MODE （自签证书请在浏览器点「继续访问」）"
+echo "首次密码: journalctl -u realmfp -n 80 --no-pager | grep -A2 初始账号"
 echo "管理命令: realmfp"
+echo "更新命令: realmfp update"

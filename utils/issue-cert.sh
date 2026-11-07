@@ -39,7 +39,12 @@ c={}
 if os.path.exists(p):
     c=json.load(open(p))
 c["tls_mode"]="$mode"
-c["public_host"]="$domain"
+domain="$domain"
+# Don't persist localhost as public_host — status/UI would show a useless URL.
+if domain and domain not in ("localhost", "127.0.0.1"):
+    c["public_host"]=domain
+elif c.get("public_host") in ("localhost", "127.0.0.1", None, ""):
+    c["public_host"]=""
 c["acme_email"]="$email"
 c["tls_cert_file"]="$cert"
 c["tls_key_file"]="$key"
@@ -189,9 +194,8 @@ prompt_and_issue() {
       issue_zerossl "$domain" "$email"
       ;;
     *)
-      read -r -p "域名或主机名 (可留空，默认 localhost): " domain
-      domain="${domain:-localhost}"
-      issue_selfsigned "$domain"
+      read -r -p "域名或主机名 (可留空): " domain
+      issue_selfsigned "${domain:-}"
       ;;
   esac
 }
@@ -212,7 +216,7 @@ case "$MODE" in
     ;;
   selfsigned|self)
     DOMAIN="${DOMAIN:-$(read_cfg | sed -n '1p')}"
-    DOMAIN="${DOMAIN:-localhost}"
+    [[ "$DOMAIN" == "localhost" || "$DOMAIN" == "127.0.0.1" ]] && DOMAIN=""
     issue_selfsigned "$DOMAIN"
     ;;
   ""|prompt)

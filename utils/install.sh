@@ -74,7 +74,7 @@ if [[ ! -f "$DATA/config.json" ]]; then
 EOF
 fi
 
-/usr/local/sbin/realmfp-issue-cert selfsigned "${XFP_DOMAIN:-localhost}" || true
+/usr/local/sbin/realmfp-issue-cert selfsigned "${XFP_DOMAIN:-}" || true
 
 cat >/etc/systemd/system/realmfp-update.service <<'EOF'
 [Unit]

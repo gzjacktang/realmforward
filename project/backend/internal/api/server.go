@@ -991,7 +991,7 @@ func fetchLatestReleaseTag() (string, string) {
 		return "", err.Error()
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "nft-forward-panel")
+	req.Header.Set("User-Agent", "realm-forward-panel")
 	res, err := client.Do(req)
 	if err != nil {
 		return "", err.Error()
