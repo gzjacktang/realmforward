@@ -96,6 +96,58 @@ detect_public_ip() {
   echo "$ip"
 }
 
+# Prefer public_host → certificate DNS/CN → public IP.
+host_from_cert() {
+  local cert="$1" h=""
+  [[ -f "$cert" ]] || return 0
+  h="$(openssl x509 -in "$cert" -noout -ext subjectAltName 2>/dev/null \
+    | tr ',' '\n' | sed -n 's/.*DNS:\s*\([^ ]*\).*/\1/p' \
+    | grep -Ev '^(localhost|)$' | head -1 || true)"
+  if [[ -z "$h" ]]; then
+    h="$(openssl x509 -in "$cert" -noout -subject 2>/dev/null \
+      | sed -n 's/.*CN\s*=\s*\([^,/]*\).*/\1/p' | head -1 || true)"
+  fi
+  case "$h" in
+    ""|localhost|127.0.0.1|realmfp) return 0 ;;
+  esac
+  # Skip bare IPs from cert — user asked for domain when they have one.
+  if [[ "$h" =~ ^[0-9.]+$ ]]; then
+    return 0
+  fi
+  echo "$h"
+}
+
+resolve_panel_host() {
+  local host cert d
+  host="$(cfg_get public_host "")"
+  case "$host" in
+    ""|localhost|127.0.0.1) host="" ;;
+  esac
+  if [[ -z "$host" ]]; then
+    cert="$(cfg_get tls_cert_file "$DATA/tls/cert.pem")"
+    host="$(host_from_cert "$cert")"
+  fi
+  # Fallback: domain from any Let's Encrypt live cert on this machine.
+  if [[ -z "$host" ]]; then
+    for d in /etc/letsencrypt/live/*/fullchain.pem; do
+      [[ -f "$d" ]] || continue
+      host="$(host_from_cert "$d")"
+      [[ -n "$host" ]] && break
+      host="$(basename "$(dirname "$d")")"
+      case "$host" in
+        .*|"") host="" ;;
+      esac
+      [[ -n "$host" ]] && break
+    done
+  fi
+  if [[ -n "$host" ]]; then
+    echo "$host"
+    return
+  fi
+  host="$(detect_public_ip)"
+  [[ -n "$host" ]] && echo "$host" || echo "<服务器公网IP>"
+}
+
 cmd_status() {
   bold "=== Realm Forward Panel 状态 ==="
   if systemctl cat "$SERVICE" >/dev/null 2>&1; then
@@ -104,24 +156,19 @@ cmd_status() {
     ylw "服务未安装"
   fi
   echo
-  local host port base ver pub
-  host="$(cfg_get public_host "")"
+  local host port base ver
+  host="$(resolve_panel_host)"
   port="$(cfg_get listen_port 2888)"
   base="$(cfg_get base_path /)"
   [[ "$base" == "/" ]] && base=""
   ver="$(tr -d '[:space:]' </opt/realmfp/VERSION 2>/dev/null || echo "?")"
-  if [[ -z "$host" || "$host" == "localhost" || "$host" == "127.0.0.1" ]]; then
-    pub="$(detect_public_ip)"
-    [[ -n "$pub" ]] && host="$pub" || host="<服务器公网IP>"
-  fi
   echo "版本: v${ver}"
   if systemctl is-active --quiet "$SERVICE" 2>/dev/null; then
     grn "面板服务: 运行中 → https://${host}:${port}${base}/"
-    echo "（浏览器访问请用公网 IP/域名；本机可用 https://127.0.0.1:${port}${base}/）"
   else
     ylw "面板服务: 未运行"
   fi
-  echo "证书: $(cfg_get tls_mode selfsigned)"
+  echo "证书: $(cfg_get tls_mode selfsigned) · 访问主机: ${host}"
   if [[ -x /usr/local/bin/realm-panel ]]; then
     echo "二进制: /usr/local/bin/realm-panel"
   fi
@@ -303,7 +350,7 @@ realmfp — Realm Forward Panel 管理工具
   realmfp update [vX.Y.Z] 拉取最新（或指定 tag）预编译包并更新
   realmfp uninstall       卸载
   realmfp passwd          更改用户名/密码
-  realmfp cert [prompt|selfsigned|letsencrypt|zerossl ...]
+  realmfp cert [adopt|prompt|selfsigned|letsencrypt|zerossl ...]
   realmfp help
 
 一键安装（新机器，无需 Go/clang）:

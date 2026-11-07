@@ -171,7 +171,138 @@ issue_zerossl() {
   echo "ZeroSSL 证书就绪: $cert"
 }
 
+# Wire an already-issued cert into panel config. Returns 0 if panel now has a usable cert+key.
+adopt_existing() {
+  python3 - <<'PY'
+import json, os, re, glob, subprocess
+
+CFG = "/var/lib/realmfp/config.json"
+DATA = "/var/lib/realmfp"
+c = {}
+if os.path.exists(CFG):
+    c = json.load(open(CFG))
+
+def dns_of(path):
+    if not os.path.isfile(path):
+        return ""
+    try:
+        out = subprocess.check_output(
+            ["openssl", "x509", "-in", path, "-noout", "-ext", "subjectAltName"],
+            stderr=subprocess.DEVNULL, text=True,
+        )
+        for m in re.finditer(r"DNS:\s*([^,\s]+)", out):
+            n = m.group(1).strip()
+            if n and n not in ("localhost",) and not re.fullmatch(r"[0-9.]+", n):
+                return n
+    except Exception:
+        pass
+    try:
+        out = subprocess.check_output(
+            ["openssl", "x509", "-in", path, "-noout", "-subject"],
+            stderr=subprocess.DEVNULL, text=True,
+        )
+        m = re.search(r"CN\s*=\s*([^,/]+)", out)
+        if m:
+            n = m.group(1).strip()
+            if n not in ("localhost", "realmfp", "127.0.0.1") and not re.fullmatch(r"[0-9.]+", n):
+                return n
+    except Exception:
+        pass
+    return ""
+
+def usable(cert, key):
+    return bool(cert and key and os.path.isfile(cert) and os.path.isfile(key))
+
+def save(mode, domain, cert, key):
+    c["tls_mode"] = mode
+    c["tls_cert_file"] = cert
+    c["tls_key_file"] = key
+    if domain and domain not in ("localhost", "127.0.0.1"):
+        c["public_host"] = domain
+    elif c.get("public_host") in ("localhost", "127.0.0.1", None, ""):
+        c["public_host"] = ""
+    os.makedirs(os.path.dirname(CFG), exist_ok=True)
+    json.dump(c, open(CFG, "w"), indent=2, ensure_ascii=False)
+    print(f"已挂载证书到面板: mode={mode} domain={c.get('public_host') or '(无)'} cert={cert}")
+
+want = (c.get("public_host") or os.environ.get("XFP_DOMAIN") or "").strip()
+cur_cert = c.get("tls_cert_file") or ""
+cur_key = c.get("tls_key_file") or ""
+cur_mode = (c.get("tls_mode") or "selfsigned").lower()
+
+# Prefer Let's Encrypt live certs over leftover self-signed panel files.
+candidates = []
+for live in sorted(glob.glob("/etc/letsencrypt/live/*/fullchain.pem")):
+    domain = os.path.basename(os.path.dirname(live))
+    if domain.startswith("."):
+        continue
+    key = os.path.join(os.path.dirname(live), "privkey.pem")
+    if usable(live, key):
+        candidates.append(("letsencrypt", domain, live, key))
+
+full = os.path.join(DATA, "tls", "fullchain.pem")
+pkey = os.path.join(DATA, "tls", "key.pem")
+if usable(full, pkey):
+    domain = dns_of(full) or want
+    mode = "zerossl" if cur_mode in ("zerossl", "zero") else "custom"
+    candidates.append((mode, domain, full, pkey))
+
+# Already wired to a public-CA / custom cert: just sync domain and keep.
+if usable(cur_cert, cur_key) and cur_mode not in ("selfsigned", "self", ""):
+    domain = dns_of(cur_cert) or want
+    if domain and not c.get("public_host"):
+        save(cur_mode, domain, cur_cert, cur_key)
+    else:
+        if domain and c.get("public_host") in ("", "localhost", "127.0.0.1"):
+            save(cur_mode, domain, cur_cert, cur_key)
+        else:
+            print(f"面板已使用证书: {cur_cert}")
+    raise SystemExit(0)
+
+# Prefer LE matching wanted domain, else first LE, else panel fullchain.
+picked = None
+if want:
+    for item in candidates:
+        if item[0] == "letsencrypt" and item[1] == want:
+            picked = item
+            break
+if picked is None:
+    for item in candidates:
+        if item[0] == "letsencrypt":
+            picked = item
+            break
+if picked is None and candidates:
+    picked = candidates[0]
+
+if picked:
+    mode, domain, cert, key = picked
+    domain = domain or dns_of(cert) or want
+    save(mode, domain, cert, key)
+    raise SystemExit(0)
+
+# Fall back to existing self-signed under data dir if present.
+ss_cert = os.path.join(DATA, "tls", "cert.pem")
+ss_key = os.path.join(DATA, "tls", "key.pem")
+if usable(ss_cert, ss_key):
+    domain = dns_of(ss_cert) or want
+    save("selfsigned", domain, ss_cert, ss_key)
+    raise SystemExit(0)
+
+if usable(cur_cert, cur_key):
+    domain = dns_of(cur_cert) or want
+    save(cur_mode or "selfsigned", domain, cur_cert, cur_key)
+    raise SystemExit(0)
+
+print("未找到可挂载的已有证书")
+raise SystemExit(1)
+PY
+}
+
 prompt_and_issue() {
+  # Reuse certs already on this machine before asking to issue again.
+  if adopt_existing; then
+    return 0
+  fi
   echo
   echo "======== TLS 证书设置 ========"
   echo "1) Let's Encrypt 免费证书（推荐，需公网域名且 80 端口可达）"
@@ -204,6 +335,9 @@ need_root
 mkdir -p "$DATA"
 
 case "$MODE" in
+  adopt|use-existing)
+    adopt_existing || exit 1
+    ;;
   letsencrypt|le)
     DOMAIN="${DOMAIN:-$(read_cfg | sed -n '1p')}"
     EMAIL="${EMAIL:-$(read_cfg | sed -n '3p')}"
@@ -223,7 +357,7 @@ case "$MODE" in
     prompt_and_issue
     ;;
   *)
-    echo "用法: $0 [letsencrypt|zerossl|selfsigned|prompt] [domain] [email]" >&2
+    echo "用法: $0 [adopt|letsencrypt|zerossl|selfsigned|prompt] [domain] [email]" >&2
     exit 1
     ;;
 esac

@@ -146,29 +146,28 @@ fi
 
 echo
 echo "======== TLS 证书 ========"
-HAS_CERT=0
-if [[ -f "$DATA/tls/cert.pem" || -f "$DATA/tls/fullchain.pem" ]] || compgen -G "/etc/letsencrypt/live/*/fullchain.pem" >/dev/null; then
-  HAS_CERT=1
-fi
-
-if [[ "$NEED_SETUP" == "1" || "$HAS_CERT" != "1" ]]; then
-  if [[ "${XFP_NONINTERACTIVE:-0}" == "1" ]]; then
-    case "${XFP_TLS_MODE:-selfsigned}" in
-      letsencrypt|le)
-        /usr/local/sbin/realmfp-issue-cert letsencrypt "${XFP_DOMAIN:?需要 XFP_DOMAIN}" "${XFP_EMAIL:-}"
-        ;;
-      zerossl|zero)
-        /usr/local/sbin/realmfp-issue-cert zerossl "${XFP_DOMAIN:?需要 XFP_DOMAIN}" "${XFP_EMAIL:?ZeroSSL 需要邮箱}"
-        ;;
-      *)
-        /usr/local/sbin/realmfp-issue-cert selfsigned "${XFP_DOMAIN:-localhost}"
-        ;;
-    esac
-  else
-    /usr/local/sbin/realmfp-issue-cert prompt
-  fi
+# Always try to mount existing LE / panel certs into config first.
+# Previous bug: seeing /etc/letsencrypt skipped issuing AND never wrote tls_* into config,
+# so the panel kept a self-signed path (or none) while status showed only the public IP.
+if /usr/local/sbin/realmfp-issue-cert adopt; then
+  echo "已使用本机已有证书"
+elif [[ "${XFP_NONINTERACTIVE:-0}" == "1" ]]; then
+  case "${XFP_TLS_MODE:-selfsigned}" in
+    letsencrypt|le)
+      /usr/local/sbin/realmfp-issue-cert letsencrypt "${XFP_DOMAIN:?需要 XFP_DOMAIN}" "${XFP_EMAIL:-}"
+      ;;
+    zerossl|zero)
+      /usr/local/sbin/realmfp-issue-cert zerossl "${XFP_DOMAIN:?需要 XFP_DOMAIN}" "${XFP_EMAIL:?ZeroSSL 需要邮箱}"
+      ;;
+    *)
+      /usr/local/sbin/realmfp-issue-cert selfsigned "${XFP_DOMAIN:-}"
+      ;;
+  esac
+elif [[ "$NEED_SETUP" == "1" ]]; then
+  /usr/local/sbin/realmfp-issue-cert prompt
 else
-  echo "检测到已有证书，跳过签发（可用 realmfp cert 更换）"
+  echo "未找到可用证书，生成自签（可用 realmfp cert 更换）"
+  /usr/local/sbin/realmfp-issue-cert selfsigned "${XFP_DOMAIN:-}"
 fi
 
 cat >/etc/systemd/system/realmfp-update.service <<'EOF'
@@ -197,35 +196,66 @@ systemctl restart realmfp.service || systemctl start realmfp.service
 sleep 1
 systemctl --no-pager status realmfp.service || true
 
-# Prefer configured host; fall back to detected public IPv4 (never print localhost).
-HOST=$(python3 - <<'PY'
-import json,urllib.request
-c=json.load(open("/var/lib/realmfp/config.json"))
+# public_host → cert DNS → public IP (and persist domain into config when found).
+HOST="$(python3 - <<'PY'
+import json, os, re, subprocess, urllib.request
+p="/var/lib/realmfp/config.json"
+c=json.load(open(p)) if os.path.exists(p) else {}
 h=(c.get("public_host") or "").strip()
-if h and h not in ("localhost","127.0.0.1"):
-    print(h); raise SystemExit
-for url in ("https://ifconfig.me","https://api.ipify.org"):
+cert=(c.get("tls_cert_file") or "/var/lib/realmfp/tls/cert.pem")
+
+def from_cert(path):
+    if not os.path.isfile(path):
+        return ""
     try:
-        print(urllib.request.urlopen(url, timeout=2).read().decode().strip()); raise SystemExit
+        out=subprocess.check_output(["openssl","x509","-in",path,"-noout","-ext","subjectAltName"], stderr=subprocess.DEVNULL, text=True)
+        for m in re.finditer(r"DNS:\s*([^,\s]+)", out):
+            n=m.group(1).strip()
+            if n and n not in ("localhost",) and not re.fullmatch(r"[0-9.]+", n):
+                return n
     except Exception:
         pass
-print("<服务器公网IP>")
-PY
-)
-MODE=$(python3 -c "import json;print(json.load(open('$DATA/config.json')).get('tls_mode','selfsigned'))")
-# Clear leftover localhost public_host so status/UI stay usable.
-python3 - <<'PY' || true
-import json
-p="/var/lib/realmfp/config.json"
-c=json.load(open(p))
-if c.get("public_host") in ("localhost","127.0.0.1"):
-    c["public_host"]=""
+    try:
+        out=subprocess.check_output(["openssl","x509","-in",path,"-noout","-subject"], stderr=subprocess.DEVNULL, text=True)
+        m=re.search(r"CN\s*=\s*([^,/]+)", out)
+        if m:
+            n=m.group(1).strip()
+            if n not in ("localhost","realmfp","127.0.0.1") and not re.fullmatch(r"[0-9.]+", n):
+                return n
+    except Exception:
+        pass
+    return ""
+
+changed=False
+if h in ("", "localhost", "127.0.0.1"):
+    h=from_cert(cert) or ""
+    if h:
+        c["public_host"]=h
+        changed=True
+    elif c.get("public_host") in ("localhost","127.0.0.1"):
+        c["public_host"]=""
+        changed=True
+if changed:
     json.dump(c, open(p,"w"), indent=2, ensure_ascii=False)
+if not h:
+    for url in ("https://ifconfig.me","https://api.ipify.org"):
+        try:
+            h=urllib.request.urlopen(url, timeout=2).read().decode().strip(); break
+        except Exception:
+            pass
+print(h or "<服务器公网IP>")
 PY
+)"
+MODE=$(python3 -c "import json;print(json.load(open('$DATA/config.json')).get('tls_mode','selfsigned'))")
+CERT=$(python3 -c "import json;print(json.load(open('$DATA/config.json')).get('tls_cert_file',''))")
 echo
 echo "安装完成 · v$VER"
 echo "面板: https://${HOST}:2888/"
-echo "证书模式: $MODE （自签证书请在浏览器点「继续访问」）"
+echo "证书模式: $MODE"
+echo "证书文件: ${CERT:-"(无)"}"
+if [[ "$MODE" == "selfsigned" ]]; then
+  echo "提示: 自签证书请在浏览器点「继续访问」；有域名可用: realmfp cert"
+fi
 echo "首次密码: journalctl -u realmfp -n 80 --no-pager | grep -A2 初始账号"
 echo "管理命令: realmfp"
 echo "更新命令: realmfp update"
