@@ -200,7 +200,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"listen":         fmt.Sprintf("%s:%d", cfg.ListenAddr, cfg.ListenPort),
 		"base_path":      cfg.BasePath,
 		"tg_enabled":     cfg.TGEnabled,
-		"warning":        "经 nftables DNAT+masquerade 转发，需开启 ip_forward。",
+		"warning":        "经 Realm 用户态转发（splice 零拷贝）；改网卡后需重启面板。",
 	})
 }
 
@@ -1057,12 +1057,13 @@ func (s *Server) handleUninstall(w http.ResponseWriter, r *http.Request) {
 		script := `set -e
 systemctl stop nftfp.service 2>/dev/null || true
 systemctl disable nftfp.service 2>/dev/null || true
+pkill -x realm 2>/dev/null || true
 nft delete table ip nftfp 2>/dev/null || true
 systemctl stop nftfp-update.timer 2>/dev/null || true
 systemctl disable nftfp-update.timer 2>/dev/null || true
 rm -f /etc/systemd/system/nftfp.service /etc/systemd/system/nftfp-update.service /etc/systemd/system/nftfp-update.timer
 systemctl daemon-reload
-rm -f /usr/local/bin/nft-panel /usr/local/bin/nftfp
+rm -f /usr/local/bin/nft-panel /usr/local/bin/nftfp /usr/local/bin/realm
 		rm -f /usr/local/sbin/nftfp-issue-cert /usr/local/sbin/nftfp-auto-update /usr/local/sbin/nftfp-do-update
 rm -rf /usr/lib/nftfp /usr/share/nftfp /opt/nftfp
 `

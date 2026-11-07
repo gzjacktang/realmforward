@@ -46,9 +46,12 @@ jobs:
           echo "ver=$VER" >> "$GITHUB_OUTPUT"
           echo "$VER" > VERSION
 
+      - name: Install pack deps
+        run: sudo apt-get update -y && sudo apt-get install -y curl ca-certificates unzip tar gzip
+
       - name: Pack release
         run: |
-          chmod +x utils/pack-release.sh
+          chmod +x utils/pack-release.sh utils/fetch-realm.sh
           ./utils/pack-release.sh "${{ steps.ver.outputs.ver }}" "${{ matrix.goarch }}"
 
       - name: Upload artifact

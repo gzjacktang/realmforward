@@ -13,7 +13,7 @@ OUT_DIR="$ROOT/dist/$OUT_NAME"
 BACKEND="$ROOT/project/backend"
 
 rm -rf "$OUT_DIR"
-mkdir -p "$OUT_DIR"/{bin,web,utils} "$ROOT/dist"
+mkdir -p "$OUT_DIR"/{bin,lib,web,utils} "$ROOT/dist"
 
 echo "版本 $VER · ${GOOS}/${GOARCH}"
 echo "$VER" >"$OUT_DIR/VERSION"
@@ -26,12 +26,17 @@ echo "编译面板…"
     -o "$OUT_DIR/bin/nft-panel" ./cmd/panel
 )
 
+echo "拉取 realm…"
+chmod +x "$ROOT/utils/fetch-realm.sh"
+"$ROOT/utils/fetch-realm.sh" "$GOARCH" "$OUT_DIR/lib/realm"
+
 install -m 0755 "$ROOT/utils/nftfp" "$OUT_DIR/bin/nftfp"
 install -m 0644 "$ROOT/project/frontend/"* "$OUT_DIR/web/"
 install -m 0755 "$ROOT/utils/install-release.sh" "$OUT_DIR/utils/install-release.sh"
 install -m 0755 "$ROOT/utils/issue-cert.sh" "$OUT_DIR/utils/issue-cert.sh"
 install -m 0755 "$ROOT/utils/auto-update.sh" "$OUT_DIR/utils/auto-update.sh"
 install -m 0755 "$ROOT/utils/do-update.sh" "$OUT_DIR/utils/do-update.sh"
+install -m 0755 "$ROOT/utils/fetch-realm.sh" "$OUT_DIR/utils/fetch-realm.sh"
 install -m 0644 "$ROOT/utils/nftfp.service" "$OUT_DIR/utils/nftfp.service"
 
 (

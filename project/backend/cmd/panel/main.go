@@ -28,9 +28,10 @@ import (
 func main() {
 	showVersion := flag.Bool("version", false, "print version and exit")
 	dataDir := flag.String("data", "/var/lib/nftfp", "data directory")
-	iface := flag.String("iface", "", "network interface for nftables NAT (default: auto)")
+	iface := flag.String("iface", "", "bind/outgoing interface for Realm (default: auto)")
 	webDir := flag.String("web", "", "static web directory")
-	noFwd := flag.Bool("no-fwd", false, "skip nftables load (API-only mode)")
+	realmBin := flag.String("realm", "", "path to realm binary")
+	noFwd := flag.Bool("no-fwd", false, "skip Realm load (API-only mode)")
 	flag.Parse()
 	if *showVersion {
 		fmt.Println(version.Version)
@@ -60,7 +61,7 @@ func main() {
 	}
 	if created {
 		fmt.Println("========================================")
-		fmt.Println("NFT Forward Panel — 初始账号")
+		fmt.Println("NFT Forward Panel (Realm) — 初始账号")
 		fmt.Println("用户名: admin")
 		fmt.Printf("密码:   %s\n", plain)
 		fmt.Println("请立即登录后修改密码；此密码只显示一次。")
@@ -68,6 +69,10 @@ func main() {
 	}
 
 	fm := fwd.New()
+	fm.SetDataDir(*dataDir)
+	if *realmBin != "" {
+		fm.SetRealmBin(*realmBin)
+	}
 	fw := firewall.Detect()
 	log.Printf("firewall backend: %s", fw.Backend)
 
@@ -81,10 +86,10 @@ func main() {
 
 	if !*noFwd {
 		if err := fm.Load(useIface); err != nil {
-			log.Printf("nftables load failed: %v", err)
-			log.Fatal("按设计：转发引擎加载失败不降级，进程退出。可用 -no-fwd 仅调试 API。")
+			log.Printf("realm load failed: %v", err)
+			log.Fatal("按设计：Realm 加载失败不降级，进程退出。可用 -no-fwd 仅调试 API。")
 		}
-		log.Printf("nftables loaded on %s mode=%s", useIface, fm.Status().Mode)
+		log.Printf("realm loaded on %s mode=%s", useIface, fm.Status().Mode)
 		_ = cfgMgr.Update(func(c *config.Config) { c.Iface = useIface })
 		rules, _ := st.ListForwards()
 		xr := make([]fwd.Rule, 0, len(rules))

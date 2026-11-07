@@ -1,26 +1,26 @@
 package fwd
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"net"
 	"os"
 	"os/exec"
-	"strconv"
-	"strings"
+	"path/filepath"
 	"sync"
-)
-
-const (
-	nftFamily = "ip"
-	nftTable  = "nftfp"
+	"syscall"
+	"time"
 )
 
 type Manager struct {
-	mu     sync.Mutex
-	status Status
-	rules  []Rule
+	mu         sync.Mutex
+	status     Status
+	rules      []Rule
+	dataDir    string
+	realmBin   string
+	configPath string
+	cmd        *exec.Cmd
+	logFile    *os.File
 }
 
 func New() *Manager {
@@ -30,45 +30,70 @@ func New() *Manager {
 func (m *Manager) Status() Status {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.status
+	st := m.status
+	if st.Loaded && m.cmd != nil && m.cmd.Process != nil {
+		if err := m.cmd.Process.Signal(syscall.Signal(0)); err != nil {
+			st.Error = "realm process not running"
+			st.Loaded = false
+		}
+	}
+	return st
+}
+
+// SetDataDir sets where realm.json and logs live (call before Load).
+func (m *Manager) SetDataDir(dir string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.dataDir = dir
+}
+
+// SetRealmBin overrides realm binary path (optional).
+func (m *Manager) SetRealmBin(path string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.realmBin = path
 }
 
 func (m *Manager) Load(iface string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if iface == "" {
-		return fmt.Errorf("iface required")
+	if m.dataDir == "" {
+		m.dataDir = "/var/lib/nftfp"
 	}
-	if _, err := net.InterfaceByName(iface); err != nil {
-		return fmt.Errorf("iface %s: %w", iface, err)
+	if err := os.MkdirAll(m.dataDir, 0o755); err != nil {
+		return err
 	}
-	if _, err := exec.LookPath("nft"); err != nil {
-		return fmt.Errorf("nft not found: install nftables")
-	}
+	// Drop leftover nftables table from older panel versions.
+	_ = exec.Command("nft", "delete", "table", "ip", "nftfp").Run()
 
-	if err := ensureIPForward(); err != nil {
+	bin, err := resolveRealmBin(m.realmBin)
+	if err != nil {
 		m.status = Status{Loaded: false, Iface: iface, Error: err.Error()}
 		return err
 	}
-	if err := ensureTable(); err != nil {
+	m.realmBin = bin
+	m.configPath = filepath.Join(m.dataDir, "realm.json")
+
+	if iface != "" {
+		if _, err := net.InterfaceByName(iface); err != nil {
+			return fmt.Errorf("iface %s: %w", iface, err)
+		}
+	}
+
+	if err := writeRealmConfig(m.configPath, iface, nil); err != nil {
 		m.status = Status{Loaded: false, Iface: iface, Error: err.Error()}
 		return err
 	}
-
-	m.status = Status{
-		Loaded: true,
-		Mode:   "nftables",
-		Iface:  iface,
-	}
+	// Process starts on SyncRules (empty endpoint list may exit immediately).
+	m.status = Status{Loaded: true, Mode: "realm", Iface: iface}
 	return nil
 }
 
 func (m *Manager) Close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	// Leave nft rules in place across restarts so traffic keeps flowing during brief downtime.
-	// Fresh SyncRules on next Load replaces content. Uninstall scripts delete the table.
+	m.stopLocked()
 	m.status.Loaded = false
 	return nil
 }
@@ -76,104 +101,40 @@ func (m *Manager) Close() error {
 func (m *Manager) SyncRules(rules []Rule) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if !m.status.Loaded {
+	if !m.status.Loaded && m.cmd == nil {
 		return fmt.Errorf("forward engine not loaded")
 	}
 	iface := m.status.Iface
-
-	var b strings.Builder
-	b.WriteString(fmt.Sprintf("flush chain %s %s prerouting\n", nftFamily, nftTable))
-	b.WriteString(fmt.Sprintf("flush chain %s %s postrouting\n", nftFamily, nftTable))
-	b.WriteString(fmt.Sprintf("flush chain %s %s forward\n", nftFamily, nftTable))
-
-	// Allow established/related always.
-	b.WriteString(fmt.Sprintf(
-		"add rule %s %s forward ct state established,related accept comment \"nftfp-est\"\n",
-		nftFamily, nftTable))
-
-	enabled := 0
-	for _, r := range rules {
-		if !r.Enabled {
-			continue
-		}
-		protos, err := ExpandProtoNames(r.Proto)
-		if err != nil {
-			return err
-		}
-		ip := net.ParseIP(r.DestIP)
-		if ip == nil || ip.To4() == nil {
-			return fmt.Errorf("IPv4 only: %s", r.DestIP)
-		}
-		dest := fmt.Sprintf("%s:%d", r.DestIP, r.DestPort)
-		for _, proto := range protos {
-			cmt := fmt.Sprintf("nftfp-r%d-%s", r.ID, proto)
-			// DNAT
-			b.WriteString(fmt.Sprintf(
-				"add rule %s %s prerouting iifname %q %s dport %d counter dnat to %s comment %q\n",
-				nftFamily, nftTable, iface, proto, r.LocalPort, dest, cmt))
-			// FORWARD accept new flows to dest
-			b.WriteString(fmt.Sprintf(
-				"add rule %s %s forward oifname != \"lo\" %s dport %d ip daddr %s counter accept comment %q\n",
-				nftFamily, nftTable, proto, r.DestPort, r.DestIP, cmt+"-fwd"))
-			// Masquerade replies path / outbound after DNAT
-			b.WriteString(fmt.Sprintf(
-				"add rule %s %s postrouting oifname %q %s dport %d ip daddr %s counter masquerade comment %q\n",
-				nftFamily, nftTable, iface, proto, r.DestPort, r.DestIP, cmt+"-snat"))
-		}
-		enabled++
-	}
-
-	if err := nftApply(b.String()); err != nil {
+	if err := writeRealmConfig(m.configPath, iface, rules); err != nil {
 		return err
 	}
+	enabled := 0
+	for _, r := range rules {
+		if r.Enabled {
+			enabled++
+		}
+	}
+	m.stopLocked()
+	if enabled > 0 {
+		if err := m.startLocked(); err != nil {
+			m.status.Error = err.Error()
+			m.status.Loaded = false
+			return err
+		}
+	}
 	m.rules = append([]Rule(nil), rules...)
+	m.status.Loaded = true
+	m.status.Mode = "realm"
 	m.status.RuleCount = enabled
+	m.status.Error = ""
 	return nil
 }
 
 func (m *Manager) GetStats() map[uint32]Stats {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	out := make(map[uint32]Stats)
-	if !m.status.Loaded {
-		return out
-	}
-	raw, err := exec.Command("nft", "-j", "list", "chain", nftFamily, nftTable, "prerouting").CombinedOutput()
-	if err != nil {
-		return out
-	}
-	var doc struct {
-		Nftables []json.RawMessage `json:"nftables"`
-	}
-	if err := json.Unmarshal(raw, &doc); err != nil {
-		return out
-	}
-	for _, item := range doc.Nftables {
-		var wrap struct {
-			Rule *struct {
-				Comment string `json:"comment"`
-				Counter *struct {
-					Packets uint64 `json:"packets"`
-					Bytes   uint64 `json:"bytes"`
-				} `json:"counter"`
-			} `json:"rule"`
-		}
-		if err := json.Unmarshal(item, &wrap); err != nil || wrap.Rule == nil || wrap.Rule.Counter == nil {
-			continue
-		}
-		id, ok := parseRuleID(wrap.Rule.Comment)
-		if !ok {
-			continue
-		}
-		st := out[id]
-		st.Packets += wrap.Rule.Counter.Packets
-		st.Bytes += wrap.Rule.Counter.Bytes
-		out[id] = st
-	}
-	return out
+	// Realm does not expose per-rule counters; keep API shape.
+	return map[uint32]Stats{}
 }
 
-// ApplyRuntimeConfig is kept for API compatibility; nft engine has no csum/SNAT pool.
 func (m *Manager) ApplyRuntimeConfig(iface string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -186,67 +147,159 @@ func (m *Manager) ApplyRuntimeConfig(iface string) error {
 	return nil
 }
 
-func parseRuleID(comment string) (uint32, bool) {
-	// nftfp-r12-tcp
-	if !strings.HasPrefix(comment, "nftfp-r") {
-		return 0, false
+func (m *Manager) startLocked() error {
+	if m.realmBin == "" || m.configPath == "" {
+		return fmt.Errorf("realm not configured")
 	}
-	rest := strings.TrimPrefix(comment, "nftfp-r")
-	i := strings.IndexByte(rest, '-')
-	if i <= 0 {
-		return 0, false
+	logPath := filepath.Join(m.dataDir, "realm.log")
+	cmd := exec.Command(m.realmBin, "-c", m.configPath)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); err == nil {
+		m.logFile = f
+		cmd.Stdout = f
+		cmd.Stderr = f
 	}
-	n, err := strconv.ParseUint(rest[:i], 10, 32)
-	if err != nil {
-		return 0, false
+	if err := cmd.Start(); err != nil {
+		if m.logFile != nil {
+			_ = m.logFile.Close()
+			m.logFile = nil
+		}
+		return fmt.Errorf("start realm: %w", err)
 	}
-	return uint32(n), true
-}
-
-func ensureIPForward() error {
-	if err := os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1\n"), 0o644); err != nil {
-		return fmt.Errorf("enable ip_forward: %w", err)
+	m.cmd = cmd
+	// Brief health check
+	time.Sleep(150 * time.Millisecond)
+	if err := cmd.Process.Signal(syscall.Signal(0)); err != nil {
+		return fmt.Errorf("realm exited immediately; check %s", logPath)
 	}
+	go func(c *exec.Cmd) {
+		_ = c.Wait()
+	}(cmd)
 	return nil
 }
 
-func ensureTable() error {
-	if out, err := exec.Command("nft", "list", "table", nftFamily, nftTable).CombinedOutput(); err != nil || len(out) == 0 {
-		if err := nftApply(fmt.Sprintf("add table %s %s\n", nftFamily, nftTable)); err != nil {
+func (m *Manager) stopLocked() {
+	if m.cmd == nil || m.cmd.Process == nil {
+		m.cmd = nil
+		return
+	}
+	pgid := m.cmd.Process.Pid
+	_ = syscall.Kill(-pgid, syscall.SIGTERM)
+	done := make(chan struct{})
+	go func() {
+		_, _ = m.cmd.Process.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		_ = syscall.Kill(-pgid, syscall.SIGKILL)
+	}
+	m.cmd = nil
+	if m.logFile != nil {
+		_ = m.logFile.Close()
+		m.logFile = nil
+	}
+}
+
+type realmFile struct {
+	Log      realmLog        `json:"log"`
+	Network  realmNetwork    `json:"network"`
+	Endpoints []realmEndpoint `json:"endpoints"`
+}
+
+type realmLog struct {
+	Level  string `json:"level"`
+	Output string `json:"output"`
+}
+
+type realmNetwork struct {
+	NoTCP  bool `json:"no_tcp"`
+	UseUDP bool `json:"use_udp"`
+}
+
+type realmEndpoint struct {
+	Listen          string       `json:"listen"`
+	Remote          string       `json:"remote"`
+	Interface       string       `json:"interface,omitempty"`
+	ListenInterface string       `json:"listen_interface,omitempty"`
+	Network         *realmNetwork `json:"network,omitempty"`
+}
+
+func writeRealmConfig(path, iface string, rules []Rule) error {
+	cfg := realmFile{
+		Log: realmLog{Level: "warn", Output: "stdout"},
+		Network: realmNetwork{
+			NoTCP:  false,
+			UseUDP: false, // per-endpoint overrides
+		},
+		Endpoints: []realmEndpoint{},
+	}
+	for _, r := range rules {
+		if !r.Enabled {
+			continue
+		}
+		ip := net.ParseIP(r.DestIP)
+		if ip == nil || ip.To4() == nil {
+			return fmt.Errorf("IPv4 only: %s", r.DestIP)
+		}
+		protos, err := ExpandProtoNames(r.Proto)
+		if err != nil {
 			return err
 		}
-	}
-	chains := []struct {
-		name string
-		def  string
-	}{
-		{"prerouting", "{ type nat hook prerouting priority dstnat; policy accept; }"},
-		{"postrouting", "{ type nat hook postrouting priority srcnat; policy accept; }"},
-		{"forward", "{ type filter hook forward priority filter; policy accept; }"},
-	}
-	for _, c := range chains {
-		if _, err := exec.Command("nft", "list", "chain", nftFamily, nftTable, c.name).CombinedOutput(); err != nil {
-			script := fmt.Sprintf("add chain %s %s %s %s\n", nftFamily, nftTable, c.name, c.def)
-			if err := nftApply(script); err != nil {
-				return err
+		useTCP, useUDP := false, false
+		for _, p := range protos {
+			if p == "tcp" {
+				useTCP = true
+			}
+			if p == "udp" {
+				useUDP = true
 			}
 		}
+		ep := realmEndpoint{
+			Listen: fmt.Sprintf("0.0.0.0:%d", r.LocalPort),
+			Remote: fmt.Sprintf("%s:%d", r.DestIP, r.DestPort),
+			Network: &realmNetwork{
+				NoTCP:  !useTCP,
+				UseUDP: useUDP,
+			},
+		}
+		if iface != "" {
+			ep.Interface = iface
+			ep.ListenInterface = iface
+		}
+		cfg.Endpoints = append(cfg.Endpoints, ep)
 	}
-	return nil
+	b, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, b, 0o644)
 }
 
-func nftApply(script string) error {
-	cmd := exec.Command("nft", "-f", "-")
-	cmd.Stdin = strings.NewReader(script)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("nft: %v: %s", err, strings.TrimSpace(stderr.String()))
+func resolveRealmBin(override string) (string, error) {
+	candidates := []string{}
+	if override != "" {
+		candidates = append(candidates, override)
 	}
-	return nil
-}
-
-// DeleteTable removes the panel nft table (used by uninstall).
-func DeleteTable() error {
-	return nftApply(fmt.Sprintf("delete table %s %s\n", nftFamily, nftTable))
+	if exe, err := os.Executable(); err == nil {
+		candidates = append(candidates, filepath.Join(filepath.Dir(exe), "realm"))
+	}
+	candidates = append(candidates,
+		"/usr/lib/nftfp/realm",
+		"/usr/local/bin/realm",
+		"realm",
+	)
+	for _, c := range candidates {
+		if c == "realm" {
+			if p, err := exec.LookPath("realm"); err == nil {
+				return p, nil
+			}
+			continue
+		}
+		if st, err := os.Stat(c); err == nil && !st.IsDir() {
+			return c, nil
+		}
+	}
+	return "", fmt.Errorf("realm binary not found (install to /usr/lib/nftfp/realm or PATH)")
 }

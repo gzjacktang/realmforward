@@ -32,6 +32,17 @@ VER="$(tr -d '[:space:]' <"$REPO_ROOT/VERSION")"
 )
 
 mkdir -p "$LIBDIR" "$SHARE/web" "$DATA" "$PREFIX/bin" /usr/local/sbin /opt/nftfp
+ARCH="$(uname -m)"
+case "$ARCH" in
+  x86_64|amd64) GOARCH=amd64 ;;
+  aarch64|arm64) GOARCH=arm64 ;;
+  *) echo "unsupported arch: $ARCH" >&2; exit 1 ;;
+esac
+chmod +x "$REPO_ROOT/utils/fetch-realm.sh"
+"$REPO_ROOT/utils/fetch-realm.sh" "$GOARCH" "$LIBDIR/realm"
+install -m 0755 "$LIBDIR/realm" /usr/local/bin/realm
+pkill -x realm 2>/dev/null || true
+nft delete table ip nftfp 2>/dev/null || true
 install -m 0755 "$BACKEND/bin/nft-panel" "$PREFIX/bin/nft-panel"
 install -m 0755 "$REPO_ROOT/utils/nftfp" /usr/local/bin/nftfp
 install -m 0644 "$REPO_ROOT/project/frontend/"* "$SHARE/web/"

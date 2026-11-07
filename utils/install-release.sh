@@ -42,9 +42,18 @@ fi
 VER="0.3.0"
 [[ -f "$PKG_ROOT/VERSION" ]] && VER="$(tr -d '[:space:]' <"$PKG_ROOT/VERSION")"
 
-echo "安装 NFT Forward Panel v$VER …"
+if [[ ! -x "$PKG_ROOT/lib/realm" ]]; then
+  echo "找不到 realm 二进制: $PKG_ROOT/lib/realm" >&2
+  exit 1
+fi
+
+echo "安装 NFT Forward Panel (Realm) v$VER …"
+pkill -x realm 2>/dev/null || true
+nft delete table ip nftfp 2>/dev/null || true
 install -m 0755 "$PKG_ROOT/bin/nft-panel" "$PREFIX/bin/nft-panel"
 install -m 0755 "$PKG_ROOT/bin/nftfp" /usr/local/bin/nftfp
+install -m 0755 "$PKG_ROOT/lib/realm" "$LIBDIR/realm"
+install -m 0755 "$PKG_ROOT/lib/realm" /usr/local/bin/realm
 install -m 0644 "$PKG_ROOT/web/"* "$SHARE/web/"
 install -m 0755 "$PKG_ROOT/utils/issue-cert.sh" /usr/local/sbin/nftfp-issue-cert
 install -m 0755 "$PKG_ROOT/utils/auto-update.sh" /usr/local/sbin/nftfp-auto-update

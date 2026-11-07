@@ -186,7 +186,7 @@ async function renderDash(el) {
   const list = Array.isArray(fwds) ? fwds : [];
   const enabled = list.filter((r) => r.enabled).length;
   el.innerHTML = `
-    <div class="page-head"><div><h2>仪表盘</h2><p class="sub">主机状态、nftables 模式与流量概览</p></div>
+    <div class="page-head"><div><h2>仪表盘</h2><p class="sub">主机状态、Realm 模式与流量概览</p></div>
       <button class="btn btn-ghost btn-sm" onclick="goPage('dash')">刷新</button></div>
     <div class="banner warn"><strong>⚠</strong><div>${st.warning || ""}</div></div>
     <div class="grid grid-4" style="margin-bottom:16px">
@@ -194,7 +194,7 @@ async function renderDash(el) {
         <div class="meta">${st.fwd?.iface || "-"} · ${st.fwd?.loaded ? "已加载" : (st.fwd?.error || "未加载")}</div></div>
       <div class="stat"><div class="label">转发规则</div><div class="value">${list.length}</div><div class="meta">${enabled} 启用</div></div>
       <div class="stat"><div class="label">防火墙</div><div class="value" style="font-size:1.1rem">${st.firewall}</div><div class="meta">监听 ${st.listen}</div></div>
-      <div class="stat"><div class="label">引擎</div><div class="value" style="font-size:1.1rem">nftables</div><div class="meta">DNAT + masquerade</div></div>
+      <div class="stat"><div class="label">引擎</div><div class="value" style="font-size:1.1rem">Realm</div><div class="meta">splice 零拷贝</div></div>
     </div>
     <div class="panel"><div class="panel-h"><h3>转发规则</h3></div>
       <table><thead><tr><th>规则</th><th>协议</th><th>包</th><th>字节</th></tr></thead>
@@ -215,9 +215,9 @@ async function renderFwd(el) {
   const raw = await api("/forwards");
   const rules = Array.isArray(raw) ? raw : [];
   el.innerHTML = `
-    <div class="page-head"><div><h2>转发规则</h2><p class="sub">nftables DNAT+masquerade · IPv4 · 支持 tcp / udp / tcp+udp</p></div>
+    <div class="page-head"><div><h2>转发规则</h2><p class="sub">Realm 用户态转发 · IPv4 · 支持 tcp / udp / tcp+udp</p></div>
       <button class="btn btn-primary" id="btn-add-fwd">＋ 添加规则</button></div>
-    <div class="banner info"><strong>ℹ</strong><div>添加/修改后自动放行对应防火墙端口。流量经 nftables NAT 转发。</div></div>
+    <div class="banner info"><strong>ℹ</strong><div>添加/修改后自动放行对应防火墙端口。流量经 Realm 转发（用户态 splice）。</div></div>
     <div class="panel"><table>
       <thead><tr><th>ID</th><th>本地</th><th>目标</th><th>协议</th><th>状态</th><th>统计</th><th></th></tr></thead>
       <tbody>${rules.map((r) => `<tr>

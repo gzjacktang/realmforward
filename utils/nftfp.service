@@ -1,16 +1,16 @@
 [Unit]
-Description=NFT Forward Panel
+Description=NFT Forward Panel (Realm)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/nft-panel -data /var/lib/nftfp -web /usr/share/nftfp/web
+ExecStart=/usr/local/bin/nft-panel -data /var/lib/nftfp -web /usr/share/nftfp/web -realm /usr/lib/nftfp/realm
 Restart=on-failure
 RestartSec=3
 LimitNOFILE=1048576
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_DAC_OVERRIDE
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_DAC_OVERRIDE CAP_SYS_ADMIN
+AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_ADMIN CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_ADMIN CAP_NET_RAW CAP_DAC_OVERRIDE CAP_SYS_ADMIN
 NoNewPrivileges=false
 
 [Install]

@@ -108,11 +108,14 @@ cmd_status() {
   if [[ -x /usr/local/bin/nft-panel ]]; then
     echo "二进制: /usr/local/bin/nft-panel"
   fi
-  if nft list table ip nftfp >/dev/null 2>&1; then
-    grn "nftables: 表 ip nftfp 已加载"
-    nft list table ip nftfp 2>/dev/null | head -20 || true
+  if pgrep -x realm >/dev/null 2>&1; then
+    grn "realm: 运行中"
+    pgrep -a -x realm || true
   else
-    ylw "nftables: 未检测到 ip nftfp（服务未运行或加载失败）"
+    ylw "realm: 未运行（无规则或服务未启动）"
+  fi
+  if [[ -f "$DATA/realm.json" ]]; then
+    echo "配置: $DATA/realm.json"
   fi
 }
 
@@ -164,6 +167,7 @@ cmd_uninstall() {
     wipe="no"
   fi
   systemctl stop "$SERVICE" 2>/dev/null || true
+  pkill -x realm 2>/dev/null || true
   nft delete table ip nftfp 2>/dev/null || true
   systemctl disable "$SERVICE" 2>/dev/null || true
   systemctl stop nft-panel-update.timer 2>/dev/null || true

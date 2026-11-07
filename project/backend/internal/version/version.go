@@ -1,7 +1,7 @@
 package version
 
 // Version is the panel release version (overridden by -ldflags at build).
-var Version = "0.3.1"
+var Version = "0.4.0"
 
-// EngineVersion tracks the forwarding engine (nftables) ABI/version.
-var EngineVersion = "0.3.1"
+// EngineVersion tracks the forwarding engine (realm) ABI/version.
+var EngineVersion = "0.4.0"

@@ -1,8 +1,8 @@
 # NFT Forward Panel
 
-基于 **nftables** 的 IPv4 端口转发面板（DNAT + masquerade）。
+基于 **[Realm](https://github.com/zhboner/realm)** 的 IPv4 端口转发面板（用户态 splice 零拷贝）。
 
-> 原 XDP 版本（`xdpforward`）已废弃，请使用本仓库。
+> 历史：曾用 XDP / nftables NAT；同口转发易撞 softirq 上限，现改 Realm。
 
 ## 一键安装
 
@@ -14,7 +14,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/gzjacktang/nftforward/main/u
 
 ## 特性
 
-- nftables DNAT + masquerade，内核/网卡校验和卸载
+- Realm TCP/UDP 转发（Linux splice）
 - Web 面板：转发规则、防火墙端口、证书、更新
 - 支持 tcp / udp / both
 - systemd 服务与自动更新
@@ -23,4 +23,5 @@ bash <(curl -fsSL https://raw.githubusercontent.com/gzjacktang/nftforward/main/u
 
 - 面板端口：`2888`（HTTPS）
 - 数据目录：`/var/lib/nftfp`
+- Realm 配置：`/var/lib/nftfp/realm.json`
 - 服务名：`nftfp.service`

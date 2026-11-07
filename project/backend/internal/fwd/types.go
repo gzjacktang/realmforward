@@ -18,7 +18,7 @@ type Stats struct {
 
 type Status struct {
 	Loaded    bool   `json:"loaded"`
-	Mode      string `json:"mode"` // nftables
+	Mode      string `json:"mode"` // realm
 	Iface     string `json:"iface"`
 	Error     string `json:"error,omitempty"`
 	RuleCount int    `json:"rule_count"`
