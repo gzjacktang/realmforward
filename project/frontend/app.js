@@ -193,16 +193,17 @@ async function renderDash(el) {
       <div class="stat"><div class="label">转发引擎</div><div class="value" style="color:var(--accent)">${st.fwd?.mode || (st.fwd?.loaded ? "on" : "off")}</div>
         <div class="meta">${st.fwd?.iface || "-"} · ${st.fwd?.loaded ? "已加载" : (st.fwd?.error || "未加载")}</div></div>
       <div class="stat"><div class="label">转发规则</div><div class="value">${list.length}</div><div class="meta">${enabled} 启用</div></div>
-      <div class="stat"><div class="label">防火墙</div><div class="value" style="font-size:1.1rem">${st.firewall}</div><div class="meta">监听 ${st.listen}</div></div>
+      <div class="stat"><div class="label">面板访问</div><div class="value" style="font-size:1rem">${esc(st.public_host || st.listen || "-")}</div>
+        <div class="meta">${st.panel_url ? esc(st.panel_url) : "防火墙 " + esc(st.firewall || "-") + " · 绑定 " + esc(st.listen || "")}</div></div>
       <div class="stat"><div class="label">引擎</div><div class="value" style="font-size:1.1rem">Realm</div><div class="meta">splice 零拷贝</div></div>
     </div>
-    <div class="panel"><div class="panel-h"><h3>转发规则</h3></div>
-      <table><thead><tr><th>规则</th><th>协议</th><th>包</th><th>字节</th></tr></thead>
+    <div class="panel"><div class="panel-h"><h3>转发规则</h3><span class="sub" style="font-size:.85rem;color:var(--muted)">连接数实时；Realm 不提供字节计数</span></div>
+      <table><thead><tr><th>规则</th><th>协议</th><th>连接</th><th>字节</th></tr></thead>
       <tbody>${list.map((r) => `<tr>
         <td class="mono">:${r.local_port} → ${r.dest_ip}:${r.dest_port}</td>
         <td><span class="tag tag-ok">${r.proto}</span></td>
         <td class="mono">${r.packets || 0}</td>
-        <td class="mono">${fmtBytes(r.bytes || 0)}</td></tr>`).join("") || `<tr><td colspan="4" class="empty">暂无规则</td></tr>`}
+        <td class="mono">—</td></tr>`).join("") || `<tr><td colspan="4" class="empty">暂无规则</td></tr>`}
       </tbody></table></div>`;
 }
 
@@ -225,7 +226,7 @@ async function renderFwd(el) {
         <td class="mono">${r.dest_ip}:${r.dest_port}</td>
         <td><span class="tag tag-info">${protoLabel(r.proto)}</span></td>
         <td><span class="tag ${r.enabled ? "tag-ok" : "tag-off"}">${r.enabled ? "enabled" : "disabled"}</span></td>
-        <td class="mono">${r.packets || 0} / ${fmtBytes(r.bytes || 0)}</td>
+        <td class="mono">${r.packets || 0} 连接 / —</td>
         <td>
           <button class="btn btn-ghost btn-sm" data-edit="${r.id}"
             data-lport="${r.local_port}" data-dip="${r.dest_ip}" data-dport="${r.dest_port}" data-proto="${r.proto}">编辑</button>

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -131,8 +132,34 @@ func (m *Manager) SyncRules(rules []Rule) error {
 }
 
 func (m *Manager) GetStats() map[uint32]Stats {
-	// Realm does not expose per-rule counters; keep API shape.
-	return map[uint32]Stats{}
+	// Realm has no byte counters. Expose active TCP connection count as Packets
+	// (UI labels it 连接); Bytes stays 0 → frontend shows "—".
+	m.mu.Lock()
+	rules := append([]Rule(nil), m.rules...)
+	m.mu.Unlock()
+	out := make(map[uint32]Stats, len(rules))
+	for _, r := range rules {
+		if !r.Enabled || r.LocalPort <= 0 {
+			continue
+		}
+		out[uint32(r.ID)] = Stats{Packets: countActiveConns(int(r.LocalPort)), Bytes: 0}
+	}
+	return out
+}
+
+func countActiveConns(port int) uint64 {
+	// Established TCP peers on the listen port (Realm accepted connections).
+	out, err := exec.Command("ss", "-Htan", "state", "established", fmt.Sprintf("( sport = :%d )", port)).Output()
+	if err != nil || len(out) == 0 {
+		return 0
+	}
+	var n uint64
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.TrimSpace(line) != "" {
+			n++
+		}
+	}
+	return n
 }
 
 func (m *Manager) ApplyRuntimeConfig(iface string) error {

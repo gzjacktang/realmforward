@@ -192,12 +192,27 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	cfg := s.Cfg.Get()
 	xs := s.Fwd.Status()
+	host := strings.TrimSpace(cfg.PublicHost)
+	if host == "" || host == "localhost" || host == "127.0.0.1" {
+		host = ""
+	}
+	bind := fmt.Sprintf("%s:%d", cfg.ListenAddr, cfg.ListenPort)
+	panelURL := ""
+	if host != "" {
+		base := cfg.BasePath
+		if base == "/" {
+			base = ""
+		}
+		panelURL = fmt.Sprintf("https://%s:%d%s/", host, cfg.ListenPort, base)
+	}
 	writeJSON(w, map[string]any{
 		"panel_version":  cfg.PanelVersion,
 		"engine_version": cfg.EngineVer,
 		"fwd":            xs,
 		"firewall":       s.FW.Backend,
-		"listen":         fmt.Sprintf("%s:%d", cfg.ListenAddr, cfg.ListenPort),
+		"listen":         bind,
+		"public_host":    host,
+		"panel_url":      panelURL,
 		"base_path":      cfg.BasePath,
 		"tg_enabled":     cfg.TGEnabled,
 		"warning":        "经 Realm 用户态转发（splice 零拷贝）；改网卡后需重启面板。",
