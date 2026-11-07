@@ -513,9 +513,9 @@ async function renderSettings(el) {
         <pre id="upd-log" class="upd-log mono" hidden></pre>
         <div class="field"><label>自动更新</label>
           <button type="button" class="toggle ${s.auto_update ? "on" : ""}" id="au"></button></div>
-        <div class="field"><label>高速校验</label>
-          <button type="button" class="toggle ${s.csum_fast ? "on" : ""}" id="csum-fast"></button>
-          <p class="hint" style="margin:6px 0 0">开启后用增量 TCP 校验（更快）。部分云主机/virtio 可能异常，出现断流请关掉。</p></div>
+        <div class="field"><label>兼容校验</label>
+          <button type="button" class="toggle ${s.csum_safe ? "on" : ""}" id="csum-safe"></button>
+          <p class="hint" style="margin:6px 0 0">默认关闭（增量校验，速度优先）。若出现断流/RST 再开启——会强制整包重算，更稳但更慢。</p></div>
         <div class="field"><label>更新地址</label><input id="upd" class="mono" value="${esc(s.update_url || "https://github.com/gzjacktang/xdpforward/releases/latest")}" /></div>
         <div style="display:flex;flex-wrap:wrap;gap:8px">
           <button class="btn btn-primary" id="do-update">${s.update_available ? "立即更新到最新" : "检查并更新"}</button>
@@ -572,7 +572,7 @@ async function renderSettings(el) {
       <button class="btn btn-warn" id="do-uninstall">卸载面板</button>
     </div></div>`;
   document.getElementById("au").onclick = function () { this.classList.toggle("on"); };
-  document.getElementById("csum-fast").onclick = function () { this.classList.toggle("on"); };
+  document.getElementById("csum-safe").onclick = function () { this.classList.toggle("on"); };
   document.getElementById("uninst-wipe").onclick = function () { this.classList.toggle("on"); };
   document.getElementById("sv").onclick = async () => {
     try {
@@ -589,7 +589,7 @@ async function renderSettings(el) {
           snat_max: +document.getElementById("smax").value,
           update_url: document.getElementById("upd").value,
           auto_update: document.getElementById("au").classList.contains("on"),
-          csum_fast: document.getElementById("csum-fast").classList.contains("on"),
+          csum_safe: document.getElementById("csum-safe").classList.contains("on"),
         }),
       });
       try { localStorage.setItem("xfp_next_url", panelURL(newBase)); } catch (_) {}

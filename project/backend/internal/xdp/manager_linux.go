@@ -104,12 +104,10 @@ func (m *Manager) Load(iface string, mode string, snatMin, snatMax uint16, csumM
 		return err
 	}
 
-	// virtio/KVM: GRO/GSO can leave mangled L4 checksums that break XDP NAT.
-	// Do NOT toggle rx-checksumming — on many cloud NICs it is fixed-on, and
-	// requesting "rx off" can put the queue into a worse checksum state for XDP_TX.
+	// Only disable GRO so XDP sees per-MTU frames. Leave GSO/TSO on — turning
+	// them off crushed throughput vs userspace tunnels on the same NIC.
+	// Do NOT toggle rx-checksumming (fixed-on on many cloud NICs).
 	_ = exec.Command("ethtool", "-K", iface, "gro", "off").Run()
-	_ = exec.Command("ethtool", "-K", iface, "gso", "off").Run()
-	_ = exec.Command("ethtool", "-K", iface, "tso", "off").Run()
 	_ = exec.Command("ethtool", "-K", iface, "rx-gro-hw", "off").Run()
 
 	usedMode, l, err := attachXDP(prog, ifi.Index, mode)

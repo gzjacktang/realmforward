@@ -695,7 +695,8 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 			"acme_email":      cfg.ACMEEmail,
 			"snat_min":        cfg.SNATPortMin,
 			"snat_max":        cfg.SNATPortMax,
-			"csum_fast":       cfg.CsumFast,
+			"csum_safe":       cfg.CsumSafe,
+			"csum_fast":       !cfg.CsumSafe, // legacy alias: fast = not safe
 			"update_url":      cfg.UpdateURL,
 			"auto_update":     cfg.AutoUpdate,
 			"panel_version":   cfg.PanelVersion,
@@ -741,8 +742,11 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 			if v, ok := body["auto_update"].(bool); ok {
 				c.AutoUpdate = v
 			}
-			if v, ok := body["csum_fast"].(bool); ok {
-				c.CsumFast = v
+			if v, ok := body["csum_safe"].(bool); ok {
+				c.CsumSafe = v
+			} else if v, ok := body["csum_fast"].(bool); ok {
+				// legacy: csum_fast true → safe off
+				c.CsumSafe = !v
 			}
 			if v, ok := body["public_host"].(string); ok {
 				c.PublicHost = v
@@ -753,7 +757,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		})
 		cfg = s.Cfg.Get()
 		csumMode := uint8(0)
-		if cfg.CsumFast {
+		if cfg.CsumSafe {
 			csumMode = 1
 		}
 		_ = s.XDP.ApplyRuntimeConfig(cfg.SNATPortMin, cfg.SNATPortMax, csumMode)

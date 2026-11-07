@@ -83,8 +83,9 @@ func main() {
 	}
 
 	if !*noXDP {
+		// BPF: 0=fast (default), 1=safe full recompute
 		csumMode := uint8(0)
-		if cfg.CsumFast {
+		if cfg.CsumSafe {
 			csumMode = 1
 		}
 		if err := xm.Load(useIface, cfg.XDPMode, cfg.SNATPortMin, cfg.SNATPortMax, csumMode); err != nil {

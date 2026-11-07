@@ -29,9 +29,9 @@ static long (*const xfp_xdp_load_bytes)(struct xdp_md *xdp_md, __u32 offset, voi
 #define MAX_RULES 256
 #define MAX_CT    65536
 
-/* csum_mode: 0 = safe (always full TCP recompute), 1 = fast (incremental when check!=0) */
-#define CSUM_MODE_SAFE 0
-#define CSUM_MODE_FAST 1
+/* csum_mode: 0 = fast (default, incremental when check!=0), 1 = safe (full TCP recompute) */
+#define CSUM_MODE_FAST 0
+#define CSUM_MODE_SAFE 1
 
 struct rule_key {
 	__u16 dport;
@@ -228,8 +228,11 @@ static __always_inline void recompute_ipv4_l4(struct xdp_md *ctx, struct iphdr *
 	*csum_field = folded;
 }
 
-/* is_return: packet from WAN/backend (valid L4 csum) → prefer incremental.
- * Client→WAN still full-recomputes by default (virtio often has stale check). */
+/*
+ * Fast (default): incremental when check!=0; full recompute only for NEEDS_CSUM (0).
+ * Safe: always full TCP recompute (virtio stale non-zero check workaround).
+ * is_return kept for call sites; WAN return already covered by fast path.
+ */
 static __always_inline void apply_l4_csum(struct xdp_md *ctx, struct iphdr *iph,
 					 __sum16 *check, __u8 proto, __u8 csum_mode,
 					 __u8 is_return,
@@ -242,16 +245,15 @@ static __always_inline void apply_l4_csum(struct xdp_md *ctx, struct iphdr *iph,
 		return;
 
 	if (proto == IPPROTO_TCP) {
-		__u8 use_inc = 0;
-		if (*check != 0 && (is_return || csum_mode == CSUM_MODE_FAST))
-			use_inc = 1;
-		if (use_inc) {
+		if (csum_mode != CSUM_MODE_SAFE && *check != 0) {
 			csum_replace2(check, old_sp, new_sp);
 			csum_replace2(check, old_dp, new_dp);
 			csum_replace4(check, old_s, new_s);
 			csum_replace4(check, old_d, new_d);
 			return;
 		}
+		/* SAFE mode, or check==0 (NEEDS_CSUM): full recompute */
+		(void)is_return;
 		recompute_ipv4_l4(ctx, iph, check, proto);
 		return;
 	}
@@ -266,8 +268,9 @@ static __always_inline void bump_stats(__u32 rule_id, __u64 bytes)
 {
 	struct stats_val *st = bpf_map_lookup_elem(&stats, &rule_id);
 	if (st) {
-		__sync_fetch_and_add(&st->packets, 1);
-		__sync_fetch_and_add(&st->bytes, bytes);
+		/* Non-atomic: stats are informational; atomics cost pps on hot path. */
+		st->packets += 1;
+		st->bytes += bytes;
 	} else {
 		struct stats_val init = {.packets = 1, .bytes = bytes};
 		bpf_map_update_elem(&stats, &rule_id, &init, BPF_ANY);

@@ -28,7 +28,8 @@ type Config struct {
 	TGAdminIDs   []int64 `json:"tg_admin_ids"`
 	TGEnabled    bool    `json:"tg_enabled"`
 	XDPMode      string  `json:"xdp_mode"` // auto|native|generic
-	CsumFast     bool    `json:"csum_fast"` // true → BPF csum_mode=1 (incremental TCP)
+	CsumSafe     bool    `json:"csum_safe"` // true → BPF full TCP recompute (slower, virtio-safe)
+	CsumFast     bool    `json:"csum_fast,omitempty"` // legacy; ignored if csum_safe set via UI
 	PanelVersion string  `json:"-"`
 	BPFVersion   string  `json:"-"`
 }
