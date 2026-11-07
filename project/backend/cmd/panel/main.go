@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/wuling/xdp-forward-panel/internal/api"
 	"github.com/wuling/xdp-forward-panel/internal/auth"
@@ -107,6 +108,13 @@ func main() {
 		if err := xm.SyncRules(xr); err != nil {
 			log.Printf("sync rules: %v", err)
 		}
+		go func() {
+			t := time.NewTicker(30 * time.Second)
+			defer t.Stop()
+			for range t.C {
+				xm.RefreshGateway()
+			}
+		}()
 	} else {
 		log.Printf("running with -no-xdp")
 	}

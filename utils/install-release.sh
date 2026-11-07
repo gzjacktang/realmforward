@@ -43,8 +43,8 @@ fi
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
-apt-get install -y ca-certificates curl openssl iproute2 \
-  || apt-get install -y ca-certificates curl openssl iproute2
+apt-get install -y ca-certificates curl openssl iproute2 ethtool \
+  || apt-get install -y ca-certificates curl openssl iproute2 ethtool
 
 mkdir -p "$LIBDIR" "$SHARE/web" "$DATA" "$PREFIX/bin" /usr/local/sbin
 

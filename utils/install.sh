@@ -32,8 +32,8 @@ BACKEND="$REPO_ROOT/project/backend"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
 apt-get install -y clang llvm make gcc "linux-headers-$(uname -r)" linux-libc-dev \
-  libbpf-dev iproute2 ca-certificates curl openssl \
-  || apt-get install -y clang llvm make gcc libbpf-dev iproute2 ca-certificates curl openssl
+  libbpf-dev iproute2 ethtool ca-certificates curl openssl \
+  || apt-get install -y clang llvm make gcc libbpf-dev iproute2 ethtool ca-certificates curl openssl
 
 if ! command -v go >/dev/null 2>&1; then
   echo "安装 Go…"

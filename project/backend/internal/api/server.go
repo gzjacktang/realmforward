@@ -760,7 +760,10 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		if cfg.CsumSafe {
 			csumMode = 1
 		}
-		_ = s.XDP.ApplyRuntimeConfig(cfg.SNATPortMin, cfg.SNATPortMax, csumMode)
+		if err := s.XDP.ApplyRuntimeConfig(cfg.SNATPortMin, cfg.SNATPortMax, csumMode); err != nil {
+			writeErr(w, 500, "应用运行时配置失败: "+err.Error())
+			return
+		}
 		writeJSON(w, map[string]any{"ok": true, "note": "监听地址/端口变更需重启服务生效；校验模式已即时生效"})
 	default:
 		writeErr(w, 405, "method")

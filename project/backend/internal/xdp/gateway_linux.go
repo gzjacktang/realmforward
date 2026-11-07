@@ -28,7 +28,8 @@ func neighMAC(iface, via string) ([6]byte, bool) {
 	}
 	nout, _ := exec.Command("ip", args...).CombinedOutput()
 	prefer := func(line string) bool {
-		return strings.Contains(line, "PERMANENT") || strings.Contains(line, "REACHABLE") || strings.Contains(line, "DELAY") || strings.Contains(line, "STALE")
+		return strings.Contains(line, "PERMANENT") || strings.Contains(line, "REACHABLE") ||
+			strings.Contains(line, "DELAY") || strings.Contains(line, "STALE")
 	}
 	var fallback [6]byte
 	var hasFallback bool
@@ -60,6 +61,8 @@ func neighMAC(iface, via string) ([6]byte, bool) {
 	return gw, false
 }
 
+// resolveEgressMACs resolves default-gateway MAC for a specific iface only.
+// Does not fall back to an arbitrary neighbor (that can TX to the wrong L2 hop).
 func resolveEgressMACs(iface string) (gw, local [6]byte, ok bool) {
 	ifi, err := net.InterfaceByName(iface)
 	if err != nil || len(ifi.HardwareAddr) < 6 {
@@ -68,27 +71,38 @@ func resolveEgressMACs(iface string) (gw, local [6]byte, ok bool) {
 	copy(local[:], ifi.HardwareAddr[:6])
 
 	via := ""
-	if out, err := exec.Command("ip", "-4", "route", "show", "default").CombinedOutput(); err == nil {
+	if out, err := exec.Command("ip", "-4", "route", "show", "default", "dev", iface).CombinedOutput(); err == nil {
 		via = parseVia(string(out))
 	}
 	if via == "" {
-		// route get often reveals via even for onlink / policy routes
-		if out, err := exec.Command("ip", "-4", "route", "get", "1.1.1.1").CombinedOutput(); err == nil {
+		if out, err := exec.Command("ip", "-4", "route", "show", "default").CombinedOutput(); err == nil {
+			// Accept only if the default route is bound to this iface.
+			for _, line := range strings.Split(string(out), "\n") {
+				if !strings.Contains(line, "default") {
+					continue
+				}
+				if strings.Contains(line, "dev "+iface) || strings.HasSuffix(line, "dev "+iface) ||
+					strings.Contains(line, " dev "+iface+" ") {
+					via = parseVia(line)
+					break
+				}
+			}
+		}
+	}
+	if via == "" {
+		if out, err := exec.Command("ip", "-4", "route", "get", "1.1.1.1", "oif", iface).CombinedOutput(); err == nil {
 			via = parseVia(string(out))
 		}
 	}
-
-	if via != "" {
-		if mac, ok := neighMAC(iface, via); ok {
-			return mac, local, true
-		}
-		_, _ = exec.Command("ping", "-c", "1", "-W", "1", via).CombinedOutput()
-		if mac, ok := neighMAC(iface, via); ok {
-			return mac, local, true
-		}
+	if via == "" {
+		return gw, local, false
 	}
-	// last resort: any usable neigh on iface (common onlink VPS gateways)
-	if mac, ok := neighMAC(iface, ""); ok {
+
+	if mac, ok := neighMAC(iface, via); ok {
+		return mac, local, true
+	}
+	_, _ = exec.Command("ping", "-c", "1", "-W", "1", "-I", iface, via).CombinedOutput()
+	if mac, ok := neighMAC(iface, via); ok {
 		return mac, local, true
 	}
 	return gw, local, false

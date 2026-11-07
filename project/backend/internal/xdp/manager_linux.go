@@ -16,6 +16,8 @@ import (
 	"github.com/cilium/ebpf/link"
 )
 
+const maxRuleKeys = 256
+
 type Manager struct {
 	mu       sync.Mutex
 	coll     *ebpf.Collection
@@ -26,6 +28,10 @@ type Manager struct {
 	statsMap *ebpf.Map
 	cfgMap   *ebpf.Map
 	ctMap    *ebpf.Map
+	iface    string
+
+	prevGRO     string // "on" / "off" / ""
+	prevRxGROHW string
 }
 
 type ruleKey struct {
@@ -55,7 +61,7 @@ type configVal struct {
 	GwMAC    [6]byte
 	LocalMAC [6]byte
 	HasGw    uint8
-	CsumMode uint8 // 0=safe full TCP recompute, 1=fast incremental
+	CsumMode uint8 // 0=fast incremental, 1=safe full TCP recompute
 }
 
 func New() *Manager {
@@ -68,6 +74,73 @@ func (m *Manager) Status() Status {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.status
+}
+
+func ethtoolFeature(iface, name string) string {
+	out, err := exec.Command("ethtool", "-k", iface).CombinedOutput()
+	if err != nil {
+		return ""
+	}
+	prefix := name + ":"
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, prefix) {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				return strings.TrimSuffix(fields[1], "[fixed]")
+			}
+		}
+	}
+	return ""
+}
+
+func (m *Manager) disableGRO(iface string) {
+	m.prevGRO = ethtoolFeature(iface, "generic-receive-offload")
+	m.prevRxGROHW = ethtoolFeature(iface, "rx-gro-hw")
+	var notes []string
+	if err := exec.Command("ethtool", "-K", iface, "gro", "off").Run(); err != nil {
+		notes = append(notes, "ethtool gro off: "+err.Error())
+	}
+	if err := exec.Command("ethtool", "-K", iface, "rx-gro-hw", "off").Run(); err != nil {
+		notes = append(notes, "ethtool rx-gro-hw off: "+err.Error())
+	}
+	if len(notes) > 0 {
+		m.status.Error = strings.TrimSpace(m.status.Error + " " + strings.Join(notes, "; "))
+	}
+}
+
+func (m *Manager) restoreGRO() {
+	if m.iface == "" {
+		return
+	}
+	if m.prevGRO == "on" {
+		_ = exec.Command("ethtool", "-K", m.iface, "gro", "on").Run()
+	}
+	if m.prevRxGROHW == "on" {
+		_ = exec.Command("ethtool", "-K", m.iface, "rx-gro-hw", "on").Run()
+	}
+}
+
+func (m *Manager) writeConfig(cfg configVal) error {
+	if m.cfgMap == nil {
+		return fmt.Errorf("config map not loaded")
+	}
+	var key uint32
+	if err := m.cfgMap.Put(key, cfg); err != nil {
+		return fmt.Errorf("config map put: %w", err)
+	}
+	return nil
+}
+
+func (m *Manager) putGatewayLocked(iface string, cfg *configVal) {
+	if gw, local, ok := resolveEgressMACs(iface); ok {
+		cfg.GwMAC = gw
+		cfg.LocalMAC = local
+		cfg.HasGw = 1
+	} else {
+		cfg.HasGw = 0
+		cfg.GwMAC = [6]byte{}
+	}
 }
 
 func (m *Manager) Load(iface string, mode string, snatMin, snatMax uint16, csumMode uint8) error {
@@ -104,14 +177,13 @@ func (m *Manager) Load(iface string, mode string, snatMin, snatMax uint16, csumM
 		return err
 	}
 
-	// Only disable GRO so XDP sees per-MTU frames. Leave GSO/TSO on — turning
-	// them off crushed throughput vs userspace tunnels on the same NIC.
-	// Do NOT toggle rx-checksumming (fixed-on on many cloud NICs).
-	_ = exec.Command("ethtool", "-K", iface, "gro", "off").Run()
-	_ = exec.Command("ethtool", "-K", iface, "rx-gro-hw", "off").Run()
+	m.iface = iface
+	m.status = Status{Iface: iface}
+	m.disableGRO(iface)
 
 	usedMode, l, err := attachXDP(prog, ifi.Index, mode)
 	if err != nil {
+		m.restoreGRO()
 		coll.Close()
 		m.status = Status{Loaded: false, Iface: iface, Error: err.Error()}
 		return err
@@ -125,26 +197,24 @@ func (m *Manager) Load(iface string, mode string, snatMin, snatMax uint16, csumM
 	m.ctMap = coll.Maps["conntrack"]
 
 	if csumMode > 1 {
-		csumMode = 0
+		csumMode = 1 // treat unknown as safe
 	}
 	cfg := configVal{Ifindex: uint32(ifi.Index), SNATMin: snatMin, SNATMax: snatMax, CsumMode: csumMode}
-	if gw, local, ok := resolveEgressMACs(iface); ok {
-		cfg.GwMAC = gw
-		cfg.LocalMAC = local
-		cfg.HasGw = 1
-	}
-	var key uint32
-	if m.cfgMap != nil {
-		_ = m.cfgMap.Put(key, cfg)
+	m.putGatewayLocked(iface, &cfg)
+	if err := m.writeConfig(cfg); err != nil {
+		_ = m.closeLocked()
+		m.status = Status{Loaded: false, Iface: iface, Error: err.Error()}
+		return err
 	}
 	if err := applyReservedPorts(snatMin, snatMax); err != nil {
-		m.status.Error = "reserved ports: " + err.Error()
+		m.status.Error = strings.TrimSpace(m.status.Error + " reserved ports: " + err.Error())
 	}
 
-	m.status = Status{
-		Loaded: true, Mode: usedMode, Iface: iface,
-		SNATMin: snatMin, SNATMax: snatMax, CsumMode: csumMode,
-	}
+	m.status.Loaded = true
+	m.status.Mode = usedMode
+	m.status.SNATMin = snatMin
+	m.status.SNATMax = snatMax
+	m.status.CsumMode = csumMode
 	if cfg.HasGw == 0 {
 		m.status.Error = strings.TrimSpace(m.status.Error + " gateway MAC unresolved")
 	}
@@ -159,12 +229,15 @@ func (m *Manager) RefreshGateway() {
 	}
 	var key uint32
 	var cfg configVal
-	_ = m.cfgMap.Lookup(key, &cfg)
-	if gw, local, ok := resolveEgressMACs(m.status.Iface); ok {
-		cfg.GwMAC = gw
-		cfg.LocalMAC = local
-		cfg.HasGw = 1
-		_ = m.cfgMap.Put(key, cfg)
+	if err := m.cfgMap.Lookup(key, &cfg); err != nil {
+		return
+	}
+	m.putGatewayLocked(m.status.Iface, &cfg)
+	_ = m.cfgMap.Put(key, cfg)
+	if cfg.HasGw == 0 {
+		m.status.Error = strings.TrimSpace(strings.ReplaceAll(m.status.Error, "gateway MAC unresolved", "") + " gateway MAC unresolved")
+	} else {
+		m.status.Error = strings.TrimSpace(strings.ReplaceAll(m.status.Error, "gateway MAC unresolved", ""))
 	}
 }
 
@@ -208,9 +281,22 @@ func (m *Manager) closeLocked() error {
 		m.coll.Close()
 		m.coll = nil
 	}
+	m.restoreGRO()
 	m.rulesMap, m.statsMap, m.cfgMap, m.ctMap = nil, nil, nil, nil
 	m.status.Loaded = false
 	return nil
+}
+
+func countRuleKeys(rules []Rule) (int, error) {
+	n := 0
+	for _, r := range rules {
+		protos, err := ExpandProtos(r.Proto)
+		if err != nil {
+			return 0, err
+		}
+		n += len(protos)
+	}
+	return n, nil
 }
 
 func (m *Manager) SyncRules(rules []Rule) error {
@@ -219,17 +305,21 @@ func (m *Manager) SyncRules(rules []Rule) error {
 	if m.rulesMap == nil {
 		return fmt.Errorf("XDP not loaded")
 	}
-	// clear by iterating — replace: delete all known then add
-	iter := m.rulesMap.Iterate()
-	var k ruleKey
-	var v ruleVal
-	var keys []ruleKey
-	for iter.Next(&k, &v) {
-		keys = append(keys, k)
+	nkeys, err := countRuleKeys(rules)
+	if err != nil {
+		return err
 	}
-	for _, kk := range keys {
-		_ = m.rulesMap.Delete(kk)
+	if nkeys > maxRuleKeys {
+		return fmt.Errorf("too many rule keys (%d); max %d (proto=both counts as 2)", nkeys, maxRuleKeys)
 	}
+
+	// Validate all entries before mutating the map.
+	type pending struct {
+		key ruleKey
+		val ruleVal
+	}
+	var want []pending
+	activeIDs := map[uint32]struct{}{}
 	for _, r := range rules {
 		protos, err := ExpandProtos(r.Proto)
 		if err != nil {
@@ -247,31 +337,61 @@ func (m *Manager) SyncRules(rules []Rule) error {
 		if r.Enabled {
 			en = 1
 		}
+		activeIDs[r.ID] = struct{}{}
 		for _, pn := range protos {
-			key := ruleKey{Dport: r.LocalPort, Proto: pn}
-			// Numeric big-endian IPv4 (e.g. 143.20.156.31 → 0x8F149C1F).
-			// BPF must bpf_htonl() before writing into the packet on LE hosts.
-			val := ruleVal{
-				RuleID:   r.ID,
-				DestIP:   binary.BigEndian.Uint32(ip4),
-				DestPort: r.DestPort,
-				Enabled:  en,
-			}
-			if err := m.rulesMap.Put(key, val); err != nil {
-				return err
-			}
+			want = append(want, pending{
+				key: ruleKey{Dport: r.LocalPort, Proto: pn},
+				val: ruleVal{
+					RuleID:   r.ID,
+					DestIP:   binary.BigEndian.Uint32(ip4),
+					DestPort: r.DestPort,
+					Enabled:  en,
+				},
+			})
+		}
+	}
+
+	iter := m.rulesMap.Iterate()
+	var k ruleKey
+	var v ruleVal
+	var oldKeys []ruleKey
+	for iter.Next(&k, &v) {
+		oldKeys = append(oldKeys, k)
+	}
+	for _, kk := range oldKeys {
+		_ = m.rulesMap.Delete(kk)
+	}
+	for _, p := range want {
+		if err := m.rulesMap.Put(p.key, p.val); err != nil {
+			return fmt.Errorf("rule put %d/%d: %w", p.key.Dport, p.key.Proto, err)
 		}
 	}
 	m.status.RuleCount = len(rules)
-	// refresh gateway MAC each sync (neigh may appear later)
-	if gw, local, ok := resolveEgressMACs(m.status.Iface); ok && m.cfgMap != nil {
+
+	// Drop orphan stats keys (per-CPU hash).
+	if m.statsMap != nil {
+		siter := m.statsMap.Iterate()
+		var sid uint32
+		var perCPU []statsVal
+		var drop []uint32
+		for siter.Next(&sid, &perCPU) {
+			if _, ok := activeIDs[sid]; !ok {
+				drop = append(drop, sid)
+			}
+		}
+		for _, id := range drop {
+			_ = m.statsMap.Delete(id)
+		}
+	}
+
+	if m.cfgMap != nil {
 		var key uint32
 		var cfg configVal
 		_ = m.cfgMap.Lookup(key, &cfg)
-		cfg.GwMAC = gw
-		cfg.LocalMAC = local
-		cfg.HasGw = 1
-		_ = m.cfgMap.Put(key, cfg)
+		m.putGatewayLocked(m.status.Iface, &cfg)
+		if err := m.cfgMap.Put(key, cfg); err != nil {
+			return fmt.Errorf("gateway config: %w", err)
+		}
 	}
 	return nil
 }
@@ -285,9 +405,14 @@ func (m *Manager) GetStats() map[uint32]Stats {
 	}
 	iter := m.statsMap.Iterate()
 	var id uint32
-	var st statsVal
-	for iter.Next(&id, &st) {
-		out[id] = Stats{Packets: st.Packets, Bytes: st.Bytes}
+	var perCPU []statsVal
+	for iter.Next(&id, &perCPU) {
+		var sum Stats
+		for _, v := range perCPU {
+			sum.Packets += v.Packets
+			sum.Bytes += v.Bytes
+		}
+		out[id] = sum
 	}
 	return out
 }
@@ -301,16 +426,21 @@ func (m *Manager) ApplyRuntimeConfig(snatMin, snatMax uint16, csumMode uint8) er
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if csumMode > 1 {
-		csumMode = 0
+		csumMode = 1
 	}
-	if m.cfgMap != nil {
-		var key uint32
-		var cfg configVal
-		_ = m.cfgMap.Lookup(key, &cfg)
-		cfg.SNATMin = snatMin
-		cfg.SNATMax = snatMax
-		cfg.CsumMode = csumMode
-		_ = m.cfgMap.Put(key, cfg)
+	if m.cfgMap == nil {
+		return fmt.Errorf("XDP config map not loaded")
+	}
+	var key uint32
+	var cfg configVal
+	if err := m.cfgMap.Lookup(key, &cfg); err != nil {
+		return fmt.Errorf("config lookup: %w", err)
+	}
+	cfg.SNATMin = snatMin
+	cfg.SNATMax = snatMax
+	cfg.CsumMode = csumMode
+	if err := m.cfgMap.Put(key, cfg); err != nil {
+		return fmt.Errorf("config put: %w", err)
 	}
 	m.status.SNATMin = snatMin
 	m.status.SNATMax = snatMax

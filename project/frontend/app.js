@@ -515,7 +515,7 @@ async function renderSettings(el) {
           <button type="button" class="toggle ${s.auto_update ? "on" : ""}" id="au"></button></div>
         <div class="field"><label>兼容校验</label>
           <button type="button" class="toggle ${s.csum_safe ? "on" : ""}" id="csum-safe"></button>
-          <p class="hint" style="margin:6px 0 0">当前版本 TCP 固定整包重算（保证连通）。此开关暂保留，不影响转发正确性。</p></div>
+          <p class="hint" style="margin:6px 0 0">默认开启：TCP 整包重算（更稳）。关闭后对 check≠0 的包走增量校验（更快）；若断流请重新打开。</p></div>
         <div class="field"><label>更新地址</label><input id="upd" class="mono" value="${esc(s.update_url || "https://github.com/gzjacktang/xdpforward/releases/latest")}" /></div>
         <div style="display:flex;flex-wrap:wrap;gap:8px">
           <button class="btn btn-primary" id="do-update">${s.update_available ? "立即更新到最新" : "检查并更新"}</button>

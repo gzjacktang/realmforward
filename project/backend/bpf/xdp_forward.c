@@ -28,8 +28,9 @@ static long (*const xfp_xdp_load_bytes)(struct xdp_md *xdp_md, __u32 offset, voi
 
 #define MAX_RULES 256
 #define MAX_CT    65536
+#define SNAT_PROBE 8
 
-/* csum_mode: 0 = fast (default, incremental when check!=0), 1 = safe (full TCP recompute) */
+/* csum_mode: 0 = fast (incremental when check!=0), 1 = safe (full TCP recompute) */
 #define CSUM_MODE_FAST 0
 #define CSUM_MODE_SAFE 1
 
@@ -47,11 +48,23 @@ struct rule_val {
 	__u8  pad;
 };
 
+/* Return-path key: panel IP + SNAT port + proto */
 struct ct_key {
 	__u32 ip;
 	__u16 port;
 	__u8  proto;
 	__u8  dir;
+};
+
+/* Forward-path key: original client 5-tuple toward panel */
+struct ct_fwd_key {
+	__u32 client_ip;
+	__u32 local_ip;
+	__u16 client_port;
+	__u16 local_port;
+	__u8  proto;
+	__u8  pad;
+	__u16 pad2;
 };
 
 struct ct_val {
@@ -95,7 +108,14 @@ struct {
 } conntrack SEC(".maps");
 
 struct {
-	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(type, BPF_MAP_TYPE_LRU_HASH);
+	__uint(max_entries, MAX_CT);
+	__type(key, struct ct_fwd_key);
+	__type(value, struct ct_val);
+} ct_fwd SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_PERCPU_HASH);
 	__uint(max_entries, MAX_RULES);
 	__type(key, __u32);
 	__type(value, struct stats_val);
@@ -115,7 +135,6 @@ struct {
 	__type(value, __u8[1504]);
 } scratch SEC(".maps");
 
-/* Fold like kernel csum_fold(). */
 static __always_inline __sum16 csum_fold_helper(__wsum csum)
 {
 	csum = (csum & 0xffff) + (csum >> 16);
@@ -124,9 +143,8 @@ static __always_inline __sum16 csum_fold_helper(__wsum csum)
 }
 
 /*
- * RFC1624 incremental update (proven path for IP header csum on this stack).
- * L4 TCP uses full recompute by default (csum_safe); do not "fix" this
- * without side-by-side IP+TCP verification — a bad replace blackholes traffic.
+ * RFC1624 incremental update — proven for IP header on this stack.
+ * Do not change endian handling without dual-path verification.
  */
 static __always_inline void csum_replace4(__sum16 *sum, __be32 from, __be32 to)
 {
@@ -148,33 +166,33 @@ static __always_inline void csum_replace2(__sum16 *sum, __be16 from, __be16 to)
 	*(__be16 *)sum = bpf_htons(~sum32 & 0xffff);
 }
 
-/* Full TCP/UDP recompute via scratch (verifier-safe). Used for virtio / NEEDS_CSUM. */
-static __always_inline void recompute_ipv4_l4(struct xdp_md *ctx, struct iphdr *iph,
-					     __sum16 *csum_field, __u8 proto)
+/* Returns 1 on success, 0 on failure (caller must not TX with stale L4 csum). */
+static __always_inline int recompute_ipv4_l4(struct xdp_md *ctx, struct iphdr *iph,
+					    __sum16 *csum_field, __u8 proto)
 {
 	__u32 tot = bpf_ntohs(iph->tot_len);
 	if (tot < sizeof(*iph))
-		return;
+		return 0;
 	__u32 l4_len = tot - sizeof(*iph);
 	if (l4_len < 8 || l4_len > 1480)
-		return;
+		return 0;
 
 	void *data = (void *)(long)ctx->data;
 	void *data_end = (void *)(long)ctx->data_end;
 	__u32 l4_off = sizeof(struct ethhdr) + sizeof(struct iphdr);
 	__u8 *l4 = (__u8 *)data + l4_off;
 	if (l4 >= (__u8 *)data_end)
-		return;
+		return 0;
 	__u32 avail = (__u32)((__u8 *)data_end - l4);
 	if (l4_len > avail)
-		return; /* refuse partial recompute — safer than wrong csum */
+		return 0;
 
 	__u32 zero = 0;
 	__u8 *buf = bpf_map_lookup_elem(&scratch, &zero);
 	if (!buf)
-		return;
+		return 0;
 	if (bpf_xdp_load_bytes(ctx, l4_off, buf, l4_len) < 0)
-		return;
+		return 0;
 
 	if (proto == IPPROTO_TCP && l4_len >= 18) {
 		buf[16] = 0;
@@ -195,16 +213,24 @@ static __always_inline void recompute_ipv4_l4(struct xdp_md *ctx, struct iphdr *
 			buf[l4_len + 2] = 0;
 	}
 
-	/* Pseudo-header from packet memory (wire order) + proto/len bytes. */
 	__wsum csum = bpf_csum_diff(NULL, 0, &iph->saddr, 8, 0);
 	__u8 plen[4] = { 0, proto, (__u8)(l4_len >> 8), (__u8)l4_len };
 	csum = bpf_csum_diff(NULL, 0, (__be32 *)plen, 4, csum);
 
 	__u32 off = 0;
+	/* Prefer 256-byte chunks to cut helper calls (audit B2). */
 #pragma unroll
-	for (int i = 0; i < 23; i++) {
-		if (off + 64 > rounded)
+	for (int i = 0; i < 6; i++) {
+		if (off + 256 > rounded)
 			break;
+		csum = bpf_csum_diff(NULL, 0, (__be32 *)(buf + off), 256, csum);
+		off += 256;
+	}
+	if (off + 128 <= rounded) {
+		csum = bpf_csum_diff(NULL, 0, (__be32 *)(buf + off), 128, csum);
+		off += 128;
+	}
+	if (off + 64 <= rounded) {
 		csum = bpf_csum_diff(NULL, 0, (__be32 *)(buf + off), 64, csum);
 		off += 64;
 	}
@@ -227,43 +253,42 @@ static __always_inline void recompute_ipv4_l4(struct xdp_md *ctx, struct iphdr *
 	if (proto == IPPROTO_UDP && folded == 0)
 		folded = (__sum16)0xffff;
 	*csum_field = folded;
+	return 1;
 }
 
-/*
- * TCP: always full recompute (incremental L4 was corrupting csums / blackholing).
- * UDP: incremental when check!=0; check==0 means optional/off.
- * csum_mode / is_return kept for ABI compatibility with config map + call sites.
- */
-static __always_inline void apply_l4_csum(struct xdp_md *ctx, struct iphdr *iph,
-					 __sum16 *check, __u8 proto, __u8 csum_mode,
-					 __u8 is_return,
-					 __be32 old_s, __be32 new_s,
-					 __be32 old_d, __be32 new_d,
-					 __be16 old_sp, __be16 new_sp,
-					 __be16 old_dp, __be16 new_dp)
+/* Returns 1 on success, 0 if L4 csum could not be fixed (do not TX). */
+static __always_inline int apply_l4_csum(struct xdp_md *ctx, struct iphdr *iph,
+					__sum16 *check, __u8 proto, __u8 csum_mode,
+					__be32 old_s, __be32 new_s,
+					__be32 old_d, __be32 new_d,
+					__be16 old_sp, __be16 new_sp,
+					__be16 old_dp, __be16 new_dp)
 {
-	(void)csum_mode;
-	(void)is_return;
-
 	if (proto == IPPROTO_UDP && *check == 0)
-		return;
+		return 1;
 
 	if (proto == IPPROTO_TCP) {
-		recompute_ipv4_l4(ctx, iph, check, proto);
-		return;
+		if (csum_mode == CSUM_MODE_FAST && *check != 0) {
+			csum_replace2(check, old_sp, new_sp);
+			csum_replace2(check, old_dp, new_dp);
+			csum_replace4(check, old_s, new_s);
+			csum_replace4(check, old_d, new_d);
+			return 1;
+		}
+		return recompute_ipv4_l4(ctx, iph, check, proto);
 	}
 
 	csum_replace2(check, old_sp, new_sp);
 	csum_replace2(check, old_dp, new_dp);
 	csum_replace4(check, old_s, new_s);
 	csum_replace4(check, old_d, new_d);
+	return 1;
 }
 
 static __always_inline void bump_stats(__u32 rule_id, __u64 bytes)
 {
 	struct stats_val *st = bpf_map_lookup_elem(&stats, &rule_id);
 	if (st) {
-		/* Non-atomic: stats are informational; atomics cost pps on hot path. */
 		st->packets += 1;
 		st->bytes += bytes;
 	} else {
@@ -277,7 +302,6 @@ static __always_inline int xdp_fib_tx(struct xdp_md *ctx, struct ethhdr *eth, st
 	__u32 zero = 0;
 	struct config_val *cfg = bpf_map_lookup_elem(&config, &zero);
 
-	/* Typical single-NIC VPS: all remote backends via default GW — skip FIB. */
 	if (cfg && cfg->has_gw) {
 		__builtin_memcpy(eth->h_dest, cfg->gw_mac, ETH_ALEN);
 		__builtin_memcpy(eth->h_source, cfg->local_mac, ETH_ALEN);
@@ -307,15 +331,23 @@ static __always_inline int xdp_fib_tx(struct xdp_md *ctx, struct ethhdr *eth, st
 	return XDP_PASS;
 }
 
-static __always_inline __u16 pick_snat(__u32 client_ip, __u16 client_port, __u16 local_port,
-				      __u8 proto, __u16 snat_min, __u16 snat_max)
+static __always_inline __u16 snat_base_hash(__u32 client_ip, __u16 client_port,
+					   __u16 local_port, __u8 proto)
 {
-	__u32 span = (__u32)(snat_max - snat_min) + 1;
-	if (span == 0)
-		span = 1;
 	__u32 h = client_ip ^ ((__u32)client_port << 16) ^ local_port ^ proto;
 	h ^= h >> 16;
-	return snat_min + (__u16)(h % span);
+	return (__u16)h;
+}
+
+/* Same-flow ownership check for an existing return-slot entry. */
+static __always_inline int ct_same_flow(struct ct_val *ex, __u32 client_ip, __u16 client_port,
+					__u16 local_port, __be32 dest_be, __u16 dest_port)
+{
+	return ex->client_ip == client_ip &&
+	       ex->client_port == client_port &&
+	       ex->local_port == local_port &&
+	       ex->dest_ip == dest_be &&
+	       ex->dest_port == dest_port;
 }
 
 SEC("xdp")
@@ -360,7 +392,7 @@ int xdp_forward(struct xdp_md *ctx)
 
 	__u64 pkt_len = (__u64)(data_end - data);
 
-	/* Return path */
+	/* -------- Return path -------- */
 	{
 		struct ct_key ck = {
 			.ip = iph->daddr,
@@ -370,6 +402,10 @@ int xdp_forward(struct xdp_md *ctx)
 		};
 		struct ct_val *ct = bpf_map_lookup_elem(&conntrack, &ck);
 		if (ct) {
+			/* Verify backend 4-tuple — reject stolen SNAT slots. */
+			if (iph->saddr != ct->dest_ip || sport != ct->dest_port)
+				return XDP_PASS;
+
 			__be32 old_s = iph->saddr;
 			__be32 old_d = iph->daddr;
 			__be16 old_sp = ports[0];
@@ -389,8 +425,10 @@ int xdp_forward(struct xdp_md *ctx)
 				csum_replace4(&iph->check, old_d, new_d);
 				iph->saddr = new_s;
 				iph->daddr = new_d;
-				apply_l4_csum(ctx, iph, &tcp->check, proto, csum_mode, 1,
-					      old_s, new_s, old_d, new_d, old_sp, new_sp, old_dp, new_dp);
+				if (!apply_l4_csum(ctx, iph, &tcp->check, proto, csum_mode,
+						   old_s, new_s, old_d, new_d,
+						   old_sp, new_sp, old_dp, new_dp))
+					return XDP_DROP;
 			} else {
 				struct udphdr *udp = (void *)(iph + 1);
 				if ((void *)(udp + 1) > data_end)
@@ -401,8 +439,10 @@ int xdp_forward(struct xdp_md *ctx)
 				csum_replace4(&iph->check, old_d, new_d);
 				iph->saddr = new_s;
 				iph->daddr = new_d;
-				apply_l4_csum(ctx, iph, &udp->check, proto, csum_mode, 1,
-					      old_s, new_s, old_d, new_d, old_sp, new_sp, old_dp, new_dp);
+				if (!apply_l4_csum(ctx, iph, &udp->check, proto, csum_mode,
+						   old_s, new_s, old_d, new_d,
+						   old_sp, new_sp, old_dp, new_dp))
+					return XDP_DROP;
 			}
 
 			bump_stats(ct->rule_id, pkt_len);
@@ -410,33 +450,89 @@ int xdp_forward(struct xdp_md *ctx)
 		}
 	}
 
-	/* Forward path */
+	/* -------- Forward path -------- */
 	struct rule_key rk = {.dport = dport, .proto = proto, .pad = 0};
 	struct rule_val *rv = bpf_map_lookup_elem(&rules, &rk);
 	if (!rv || !rv->enabled)
 		return XDP_PASS;
 
-	__u16 snat = pick_snat(iph->saddr, sport, dport, proto, snat_min, snat_max);
-
-	/* Map dest_ip is big-endian numeric from userspace; convert once for wire. */
 	__be32 dest_be = bpf_htonl(rv->dest_ip);
+	__u16 snat = 0;
+	__u16 dest_port = rv->dest_port;
+	__u32 rule_id = rv->rule_id;
 
-	struct ct_val cv = {
+	struct ct_fwd_key fk = {
 		.client_ip = iph->saddr,
-		.dest_ip = dest_be,
+		.local_ip = iph->daddr,
 		.client_port = sport,
 		.local_port = dport,
-		.dest_port = rv->dest_port,
-		.snat_port = snat,
-		.rule_id = rv->rule_id,
-	};
-	struct ct_key ck = {
-		.ip = iph->daddr,
-		.port = snat,
 		.proto = proto,
-		.dir = 0,
 	};
-	bpf_map_update_elem(&conntrack, &ck, &cv, BPF_ANY);
+	struct ct_val *existing = bpf_map_lookup_elem(&ct_fwd, &fk);
+	if (existing && existing->dest_ip == dest_be && existing->dest_port == dest_port) {
+		snat = existing->snat_port;
+		rule_id = existing->rule_id;
+		/* Refresh return slot in case LRU evicted it. */
+		struct ct_key rk_keep = {
+			.ip = iph->daddr,
+			.port = snat,
+			.proto = proto,
+			.dir = 0,
+		};
+		bpf_map_update_elem(&conntrack, &rk_keep, existing, BPF_ANY);
+	} else {
+		__u32 span = (__u32)(snat_max - snat_min) + 1;
+		if (span == 0)
+			span = 1;
+		__u16 base = snat_base_hash(iph->saddr, sport, dport, proto);
+		int found = 0;
+		struct ct_val cv = {
+			.client_ip = iph->saddr,
+			.dest_ip = dest_be,
+			.client_port = sport,
+			.local_port = dport,
+			.dest_port = dest_port,
+			.rule_id = rule_id,
+		};
+#pragma unroll
+		for (int i = 0; i < SNAT_PROBE; i++) {
+			__u16 cand = snat_min + (__u16)((base + (__u16)i) % span);
+			struct ct_key rk_ret = {
+				.ip = iph->daddr,
+				.port = cand,
+				.proto = proto,
+				.dir = 0,
+			};
+			struct ct_val *slot = bpf_map_lookup_elem(&conntrack, &rk_ret);
+			if (slot) {
+				if (ct_same_flow(slot, iph->saddr, sport, dport, dest_be, dest_port)) {
+					snat = cand;
+					found = 1;
+					break;
+				}
+				continue; /* foreign flow occupies this SNAT */
+			}
+			cv.snat_port = cand;
+			if (bpf_map_update_elem(&conntrack, &rk_ret, &cv, BPF_NOEXIST) == 0) {
+				snat = cand;
+				found = 1;
+				break;
+			}
+		}
+		if (!found)
+			return XDP_PASS;
+
+		cv.snat_port = snat;
+		struct ct_key rk_ret = {
+			.ip = iph->daddr,
+			.port = snat,
+			.proto = proto,
+			.dir = 0,
+		};
+		/* Ensure return slot has our mapping (NOEXIST may have raced). */
+		bpf_map_update_elem(&conntrack, &rk_ret, &cv, BPF_ANY);
+		bpf_map_update_elem(&ct_fwd, &fk, &cv, BPF_ANY);
+	}
 
 	__be32 old_s = iph->saddr;
 	__be32 old_d = iph->daddr;
@@ -445,7 +541,7 @@ int xdp_forward(struct xdp_md *ctx)
 	__be32 new_s = old_d;
 	__be32 new_d = dest_be;
 	__be16 new_sp = bpf_htons(snat);
-	__be16 new_dp = bpf_htons(rv->dest_port);
+	__be16 new_dp = bpf_htons(dest_port);
 
 	if (proto == IPPROTO_TCP) {
 		struct tcphdr *tcp = (void *)(iph + 1);
@@ -457,8 +553,10 @@ int xdp_forward(struct xdp_md *ctx)
 		csum_replace4(&iph->check, old_d, new_d);
 		iph->saddr = new_s;
 		iph->daddr = new_d;
-		apply_l4_csum(ctx, iph, &tcp->check, proto, csum_mode, 0,
-			      old_s, new_s, old_d, new_d, old_sp, new_sp, old_dp, new_dp);
+		if (!apply_l4_csum(ctx, iph, &tcp->check, proto, csum_mode,
+				   old_s, new_s, old_d, new_d,
+				   old_sp, new_sp, old_dp, new_dp))
+			return XDP_DROP;
 	} else {
 		struct udphdr *udp = (void *)(iph + 1);
 		if ((void *)(udp + 1) > data_end)
@@ -469,11 +567,13 @@ int xdp_forward(struct xdp_md *ctx)
 		csum_replace4(&iph->check, old_d, new_d);
 		iph->saddr = new_s;
 		iph->daddr = new_d;
-		apply_l4_csum(ctx, iph, &udp->check, proto, csum_mode, 0,
-			      old_s, new_s, old_d, new_d, old_sp, new_sp, old_dp, new_dp);
+		if (!apply_l4_csum(ctx, iph, &udp->check, proto, csum_mode,
+				   old_s, new_s, old_d, new_d,
+				   old_sp, new_sp, old_dp, new_dp))
+			return XDP_DROP;
 	}
 
-	bump_stats(rv->rule_id, pkt_len);
+	bump_stats(rule_id, pkt_len);
 	return xdp_fib_tx(ctx, eth, iph);
 }
 
