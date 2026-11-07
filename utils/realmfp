@@ -88,6 +88,14 @@ fetch_release_pkg() {
   [[ -x "$_XFP_ROOT/bin/realm-panel" ]] || { red "解压失败"; rm -rf "$_XFP_TMP"; exit 1; }
 }
 
+detect_public_ip() {
+  local ip=""
+  ip="$(curl -4 -fsS --max-time 2 https://ifconfig.me 2>/dev/null || true)"
+  [[ -z "$ip" ]] && ip="$(curl -4 -fsS --max-time 2 https://api.ipify.org 2>/dev/null || true)"
+  [[ -z "$ip" ]] && ip="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')"
+  echo "$ip"
+}
+
 cmd_status() {
   bold "=== Realm Forward Panel 状态 ==="
   if systemctl cat "$SERVICE" >/dev/null 2>&1; then
@@ -96,23 +104,32 @@ cmd_status() {
     ylw "服务未安装"
   fi
   echo
-  local host port base ver
-  host="$(cfg_get public_host "<IP>")"
+  local host port base ver pub
+  host="$(cfg_get public_host "")"
   port="$(cfg_get listen_port 2888)"
   base="$(cfg_get base_path /)"
   [[ "$base" == "/" ]] && base=""
   ver="$(tr -d '[:space:]' </opt/realmfp/VERSION 2>/dev/null || echo "?")"
+  if [[ -z "$host" || "$host" == "localhost" || "$host" == "127.0.0.1" ]]; then
+    pub="$(detect_public_ip)"
+    [[ -n "$pub" ]] && host="$pub" || host="<服务器公网IP>"
+  fi
   echo "版本: v${ver}"
-  echo "面板: https://${host}:${port}${base}/"
+  if systemctl is-active --quiet "$SERVICE" 2>/dev/null; then
+    grn "面板服务: 运行中 → https://${host}:${port}${base}/"
+    echo "（浏览器访问请用公网 IP/域名；本机可用 https://127.0.0.1:${port}${base}/）"
+  else
+    ylw "面板服务: 未运行"
+  fi
   echo "证书: $(cfg_get tls_mode selfsigned)"
   if [[ -x /usr/local/bin/realm-panel ]]; then
     echo "二进制: /usr/local/bin/realm-panel"
   fi
   if pgrep -x realm >/dev/null 2>&1; then
-    grn "realm: 运行中"
+    grn "转发引擎 realm: 运行中"
     pgrep -a -x realm || true
   else
-    ylw "realm: 未运行（无规则或服务未启动）"
+    ylw "转发引擎 realm: 未运行（面板里还没有启用规则时正常）"
   fi
   if [[ -f "$DATA/realm.json" ]]; then
     echo "配置: $DATA/realm.json"
