@@ -124,34 +124,28 @@ static __always_inline __sum16 csum_fold_helper(__wsum csum)
 }
 
 /*
- * RFC1624 incremental update.
- * Must match recompute_ipv4_l4 / csum_fold_helper storage: write __sum16 as the
- * raw folded value (NO ntohs/htons on *sum). Mixing htons here made "fast"
- * mode corrupt TCP csums → retransmits → slower than full recompute.
- * Address/port args are __be* field values; convert with ntohl/ntohs for math.
+ * RFC1624 incremental update (proven path for IP header csum on this stack).
+ * L4 TCP uses full recompute by default (csum_safe); do not "fix" this
+ * without side-by-side IP+TCP verification — a bad replace blackholes traffic.
  */
-static __always_inline void csum_replace2(__sum16 *sum, __be16 from, __be16 to)
-{
-	__u32 sum32 = ~((__u32)(__u16)*sum) & 0xffff;
-	sum32 += (~bpf_ntohs(from)) & 0xffff;
-	sum32 += bpf_ntohs(to) & 0xffff;
-	sum32 = (sum32 & 0xffff) + (sum32 >> 16);
-	sum32 = (sum32 & 0xffff) + (sum32 >> 16);
-	*sum = (__sum16)(~sum32 & 0xffff);
-}
-
 static __always_inline void csum_replace4(__sum16 *sum, __be32 from, __be32 to)
 {
-	__u32 sum32 = ~((__u32)(__u16)*sum) & 0xffff;
-	__u32 fold_from = bpf_ntohl(from);
-	__u32 fold_to = bpf_ntohl(to);
-	sum32 += (~fold_from) & 0xffff;
-	sum32 += (~(fold_from >> 16)) & 0xffff;
-	sum32 += fold_to & 0xffff;
-	sum32 += (fold_to >> 16) & 0xffff;
+	__u32 sum32 = ~(__u32)bpf_ntohs(*(__be16 *)sum) & 0xffff;
+	sum32 += (~bpf_ntohl(from) & 0xffff) + (~(bpf_ntohl(from) >> 16) & 0xffff);
+	sum32 += (bpf_ntohl(to) & 0xffff) + ((bpf_ntohl(to) >> 16) & 0xffff);
 	sum32 = (sum32 & 0xffff) + (sum32 >> 16);
 	sum32 = (sum32 & 0xffff) + (sum32 >> 16);
-	*sum = (__sum16)(~sum32 & 0xffff);
+	*(__be16 *)sum = bpf_htons(~sum32 & 0xffff);
+}
+
+static __always_inline void csum_replace2(__sum16 *sum, __be16 from, __be16 to)
+{
+	__u32 sum32 = ~(__u32)bpf_ntohs(*(__be16 *)sum) & 0xffff;
+	sum32 += (~bpf_ntohs(from) & 0xffff);
+	sum32 += (bpf_ntohs(to) & 0xffff);
+	sum32 = (sum32 & 0xffff) + (sum32 >> 16);
+	sum32 = (sum32 & 0xffff) + (sum32 >> 16);
+	*(__be16 *)sum = bpf_htons(~sum32 & 0xffff);
 }
 
 /* Full TCP/UDP recompute via scratch (verifier-safe). Used for virtio / NEEDS_CSUM. */
@@ -236,9 +230,9 @@ static __always_inline void recompute_ipv4_l4(struct xdp_md *ctx, struct iphdr *
 }
 
 /*
- * Fast (default): incremental when check!=0; full recompute only for NEEDS_CSUM (0).
- * Safe: always full TCP recompute (virtio stale non-zero check workaround).
- * is_return kept for call sites; WAN return already covered by fast path.
+ * TCP: always full recompute (incremental L4 was corrupting csums / blackholing).
+ * UDP: incremental when check!=0; check==0 means optional/off.
+ * csum_mode / is_return kept for ABI compatibility with config map + call sites.
  */
 static __always_inline void apply_l4_csum(struct xdp_md *ctx, struct iphdr *iph,
 					 __sum16 *check, __u8 proto, __u8 csum_mode,
@@ -248,19 +242,13 @@ static __always_inline void apply_l4_csum(struct xdp_md *ctx, struct iphdr *iph,
 					 __be16 old_sp, __be16 new_sp,
 					 __be16 old_dp, __be16 new_dp)
 {
+	(void)csum_mode;
+	(void)is_return;
+
 	if (proto == IPPROTO_UDP && *check == 0)
 		return;
 
 	if (proto == IPPROTO_TCP) {
-		if (csum_mode != CSUM_MODE_SAFE && *check != 0) {
-			csum_replace2(check, old_sp, new_sp);
-			csum_replace2(check, old_dp, new_dp);
-			csum_replace4(check, old_s, new_s);
-			csum_replace4(check, old_d, new_d);
-			return;
-		}
-		/* SAFE mode, or check==0 (NEEDS_CSUM): full recompute */
-		(void)is_return;
 		recompute_ipv4_l4(ctx, iph, check, proto);
 		return;
 	}
