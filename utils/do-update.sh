@@ -2,20 +2,20 @@
 # 脱离面板进程执行更新（systemd-run 调用），写入状态供 Web 轮询。
 set -euo pipefail
 
-DATA="${XFP_DATA:-/var/lib/xdp-forward-panel}"
+DATA="${XFP_DATA:-/var/lib/nftfp}"
 STATUS="$DATA/update-status.json"
 LOG="$DATA/update.log"
 mkdir -p "$DATA"
 
-from_ver="$(tr -d '[:space:]' </opt/xdp-forward-panel/VERSION 2>/dev/null || true)"
-[[ -n "$from_ver" ]] || from_ver="$(/usr/local/bin/xdp-panel -version 2>/dev/null | head -1 || echo unknown)"
+from_ver="$(tr -d '[:space:]' </opt/nftfp/VERSION 2>/dev/null || true)"
+[[ -n "$from_ver" ]] || from_ver="$(/usr/local/bin/nft-panel -version 2>/dev/null | head -1 || echo unknown)"
 
 want_tag="${1:-}"
 
 write_status() {
   local state="$1" err="${2:-}"
   local to_ver
-  to_ver="$(tr -d '[:space:]' </opt/xdp-forward-panel/VERSION 2>/dev/null || echo "")"
+  to_ver="$(tr -d '[:space:]' </opt/nftfp/VERSION 2>/dev/null || echo "")"
   python3 - "$STATUS" "$state" "$from_ver" "$to_ver" "$err" "$want_tag" <<'PY'
 import json,sys,time,os
 path,state,frm,to,err,tag=sys.argv[1:7]
@@ -32,7 +32,7 @@ obj={
   "error": err or "",
   "started_at": prev.get("started_at") or now,
   "finished_at": now if state in ("ok","fail") else "",
-  "log_path": "/var/lib/xdp-forward-panel/update.log",
+  "log_path": "/var/lib/nftfp/update.log",
 }
 if state=="running":
   obj["started_at"]=now
@@ -46,16 +46,16 @@ PY
 write_status running
 {
   echo "==== $(date -u +%Y-%m-%dT%H:%M:%SZ) update start from=${from_ver} want=${want_tag:-latest} ===="
-  if [[ ! -x /usr/local/bin/xdp ]]; then
-    echo "ERROR: /usr/local/bin/xdp 不存在" >&2
-    write_status fail "xdp CLI 不存在"
+  if [[ ! -x /usr/local/bin/nftfp ]]; then
+    echo "ERROR: /usr/local/bin/nftfp 不存在" >&2
+    write_status fail "nftfp CLI 不存在"
     exit 1
   fi
   set +e
   if [[ -n "$want_tag" ]]; then
-    /usr/local/bin/xdp update "$want_tag"
+    /usr/local/bin/nftfp update "$want_tag"
   else
-    /usr/local/bin/xdp update
+    /usr/local/bin/nftfp update
   fi
   rc=$?
   set -e
@@ -63,7 +63,7 @@ write_status running
   if [[ $rc -eq 0 ]]; then
     write_status ok
   else
-    write_status fail "xdp update 退出码 $rc"
+    write_status fail "nftfp update 退出码 $rc"
     exit "$rc"
   fi
 } >>"$LOG" 2>&1

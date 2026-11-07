@@ -17,20 +17,20 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wuling/xdp-forward-panel/internal/auth"
-	"github.com/wuling/xdp-forward-panel/internal/config"
-	"github.com/wuling/xdp-forward-panel/internal/firewall"
-	"github.com/wuling/xdp-forward-panel/internal/listen"
-	"github.com/wuling/xdp-forward-panel/internal/store"
-	"github.com/wuling/xdp-forward-panel/internal/tlsutil"
-	"github.com/wuling/xdp-forward-panel/internal/xdp"
+	"github.com/gzjacktang/nftforward/internal/auth"
+	"github.com/gzjacktang/nftforward/internal/config"
+	"github.com/gzjacktang/nftforward/internal/firewall"
+	"github.com/gzjacktang/nftforward/internal/listen"
+	"github.com/gzjacktang/nftforward/internal/store"
+	"github.com/gzjacktang/nftforward/internal/tlsutil"
+	"github.com/gzjacktang/nftforward/internal/fwd"
 )
 
 type Server struct {
 	Cfg      *config.Manager
 	Store    *store.Store
 	Auth     *auth.Service
-	XDP      *xdp.Manager
+	Fwd     *fwd.Manager
 	FW       *firewall.Manager
 	Static   fs.FS
 	SSHPort  int
@@ -191,17 +191,16 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	cfg := s.Cfg.Get()
-	xs := s.XDP.Status()
+	xs := s.Fwd.Status()
 	writeJSON(w, map[string]any{
-		"panel_version": cfg.PanelVersion,
-		"bpf_version":   cfg.BPFVersion,
-		"xdp":           xs,
-		"firewall":      s.FW.Backend,
-		"listen":        fmt.Sprintf("%s:%d", cfg.ListenAddr, cfg.ListenPort),
-		"base_path":     cfg.BasePath,
-		"snat":          fmt.Sprintf("%d-%d", cfg.SNATPortMin, cfg.SNATPortMax),
-		"tg_enabled":    cfg.TGEnabled,
-		"warning":       "XDP 在 netfilter 之前执行，转发端口会绕过防火墙。",
+		"panel_version":  cfg.PanelVersion,
+		"engine_version": cfg.EngineVer,
+		"fwd":            xs,
+		"firewall":       s.FW.Backend,
+		"listen":         fmt.Sprintf("%s:%d", cfg.ListenAddr, cfg.ListenPort),
+		"base_path":      cfg.BasePath,
+		"tg_enabled":     cfg.TGEnabled,
+		"warning":        "经 nftables DNAT+masquerade 转发，需开启 ip_forward。",
 	})
 }
 
@@ -213,7 +212,7 @@ func (s *Server) handleForwards(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, 500, err.Error())
 			return
 		}
-		st := s.XDP.GetStats()
+		st := s.Fwd.GetStats()
 		for i := range rules {
 			if s, ok := st[uint32(rules[i].ID)]; ok {
 				rules[i].Packets = s.Packets
@@ -242,7 +241,7 @@ func (s *Server) handleForwards(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, 400, "IPv4 only")
 			return
 		}
-		proto, err := xdp.NormalizeProto(body.Proto)
+		proto, err := fwd.NormalizeProto(body.Proto)
 		if err != nil {
 			writeErr(w, 400, err.Error())
 			return
@@ -253,8 +252,8 @@ func (s *Server) handleForwards(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		_ = s.FW.Open(body.LocalPort, proto)
-		if err := s.syncXDP(); err != nil {
-			writeErr(w, 500, "saved but xdp sync: "+err.Error())
+		if err := s.syncFwd(); err != nil {
+			writeErr(w, 500, "saved but fwd sync: "+err.Error())
 			return
 		}
 		_ = s.Store.AddAudit("web", "admin", "fwd.add", "ok", fmt.Sprintf("%d %d->%s:%d %s", id, body.LocalPort, body.DestIP, body.DestPort, proto))
@@ -287,7 +286,7 @@ func (s *Server) handleForwardItem(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, 500, err.Error())
 			return
 		}
-		_ = s.syncXDP()
+		_ = s.syncFwd()
 		writeJSON(w, map[string]any{"ok": true})
 		return
 	}
@@ -307,7 +306,7 @@ func (s *Server) handleForwardItem(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, 400, "IPv4 only")
 			return
 		}
-		proto, err := xdp.NormalizeProto(body.Proto)
+		proto, err := fwd.NormalizeProto(body.Proto)
 		if err != nil {
 			writeErr(w, 400, err.Error())
 			return
@@ -321,7 +320,7 @@ func (s *Server) handleForwardItem(w http.ResponseWriter, r *http.Request) {
 			_ = s.FW.Close(old.LocalPort, old.Proto)
 		}
 		_ = s.FW.Open(body.LocalPort, proto)
-		_ = s.syncXDP()
+		_ = s.syncFwd()
 		_ = s.Store.AddAudit("web", "admin", "fwd.edit", "ok", fmt.Sprintf("%d", id))
 		writeJSON(w, map[string]any{"ok": true})
 		return
@@ -334,7 +333,7 @@ func (s *Server) handleForwardItem(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, 500, err.Error())
 			return
 		}
-		_ = s.syncXDP()
+		_ = s.syncFwd()
 		_ = s.Store.AddAudit("web", "admin", "fwd.del", "ok", fmt.Sprintf("%d", id))
 		writeJSON(w, map[string]any{"ok": true})
 		return
@@ -348,7 +347,7 @@ func (s *Server) handlePorts(w http.ResponseWriter, r *http.Request) {
 		Proto     string `json:"proto"`
 		Firewall  string `json:"firewall"`
 		Listening string `json:"listening"`
-		XDP       string `json:"xdp"`
+		Fwd       string `json:"fwd"`
 		Protected bool   `json:"protected"`
 	}
 	cfg := s.Cfg.Get()
@@ -383,19 +382,19 @@ func (s *Server) handlePorts(w http.ResponseWriter, r *http.Request) {
 				lis = "listening"
 			}
 		}
-		xdpTag := "—"
+		fwdTag := "—"
 		for _, fr := range rules {
 			if !fr.Enabled || fr.LocalPort != port {
 				continue
 			}
 			fp := strings.ToLower(fr.Proto)
 			if fp == proto || fp == "both" || fp == "tcp+udp" {
-				xdpTag = fmt.Sprintf("fwd #%d", fr.ID)
+				fwdTag = fmt.Sprintf("fwd #%d", fr.ID)
 				break
 			}
 		}
 		prot := port == cfg.ListenPort || (s.SSHPort > 0 && port == s.SSHPort)
-		seen[k] = row{Port: port, Proto: proto, Firewall: fw, Listening: lis, XDP: xdpTag, Protected: prot}
+		seen[k] = row{Port: port, Proto: proto, Firewall: fw, Listening: lis, Fwd: fwdTag, Protected: prot}
 	}
 	add(cfg.ListenPort, "tcp")
 	if s.SSHPort > 0 {
@@ -414,7 +413,7 @@ func (s *Server) handlePorts(w http.ResponseWriter, r *http.Request) {
 	// merge same port tcp+udp into one proto=both row
 	byPort := map[int][]row{}
 	for _, v := range seen {
-		hasBiz := v.Listening != "无" || v.XDP != "—" || v.Protected
+		hasBiz := v.Listening != "无" || v.Fwd != "—" || v.Protected
 		if v.Firewall == "closed" && !hasBiz {
 			continue
 		}
@@ -445,8 +444,8 @@ func (s *Server) handlePorts(w http.ResponseWriter, r *http.Request) {
 			if merged.Listening == "无" && udp.Listening != "无" {
 				merged.Listening = udp.Listening
 			}
-			if merged.XDP == "—" && udp.XDP != "—" {
-				merged.XDP = udp.XDP
+			if merged.Fwd == "—" && udp.Fwd != "—" {
+				merged.Fwd = udp.Fwd
 			}
 			merged.Protected = tcp.Protected || udp.Protected
 			out = append(out, merged)
@@ -479,7 +478,7 @@ func (s *Server) handlePorts(w http.ResponseWriter, r *http.Request) {
 }
 
 // handlePortsHarden enables default-deny firewall and closes ports with no
-// business (no listener, no XDP forward, not SSH/panel). Keeps business ports open.
+// business (no listener, no nft forward, not SSH/panel). Keeps business ports open.
 func (s *Server) handlePortsHarden(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeErr(w, 405, "method")
@@ -518,7 +517,7 @@ func (s *Server) handlePortsHarden(w http.ResponseWriter, r *http.Request) {
 		if !fr.Enabled {
 			continue
 		}
-		addKeep(fr.LocalPort, fr.Proto, "xdp")
+		addKeep(fr.LocalPort, fr.Proto, "fwd")
 	}
 
 	// Open business ports first (before DROP policy).
@@ -592,7 +591,7 @@ func (s *Server) handlePortOpen(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "bad json")
 		return
 	}
-	proto, err := xdp.NormalizeProto(body.Proto)
+	proto, err := fwd.NormalizeProto(body.Proto)
 	if err != nil {
 		writeErr(w, 400, err.Error())
 		return
@@ -625,7 +624,7 @@ func (s *Server) handlePortClose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	proto := body.Proto
-	if p, err := xdp.NormalizeProto(body.Proto); err == nil {
+	if p, err := fwd.NormalizeProto(body.Proto); err == nil {
 		proto = p
 	}
 	if err := s.FW.Close(body.Port, proto); err != nil {
@@ -693,14 +692,10 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 			"public_host":     cfg.PublicHost,
 			"tls_mode":        cfg.TLSMode,
 			"acme_email":      cfg.ACMEEmail,
-			"snat_min":        cfg.SNATPortMin,
-			"snat_max":        cfg.SNATPortMax,
-			"csum_safe":       cfg.CsumSafe,
-			"csum_fast":       !cfg.CsumSafe, // legacy alias: fast = not safe
 			"update_url":      cfg.UpdateURL,
 			"auto_update":     cfg.AutoUpdate,
 			"panel_version":   cfg.PanelVersion,
-			"bpf_version":     cfg.BPFVersion,
+			"engine_version":     cfg.EngineVer,
 			"installed_version": readInstalledVersion(),
 			"latest_version":  latest,
 			"update_available": latest != "" && normalizeVer(latest) != normalizeVer(cfg.PanelVersion),
@@ -709,7 +704,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 			"tls":             tlsInfo,
 			"tls_cert_file":   cfg.TLSCertFile,
 			"username":        username,
-			"xdp":             s.XDP.Status(),
+			"fwd":             s.Fwd.Status(),
 		})
 	case http.MethodPost:
 		var body map[string]any
@@ -730,23 +725,11 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 			if v, ok := body["iface"].(string); ok {
 				c.Iface = v
 			}
-			if v, ok := body["snat_min"].(float64); ok {
-				c.SNATPortMin = uint16(v)
-			}
-			if v, ok := body["snat_max"].(float64); ok {
-				c.SNATPortMax = uint16(v)
-			}
 			if v, ok := body["update_url"].(string); ok {
 				c.UpdateURL = v
 			}
 			if v, ok := body["auto_update"].(bool); ok {
 				c.AutoUpdate = v
-			}
-			if v, ok := body["csum_safe"].(bool); ok {
-				c.CsumSafe = v
-			} else if v, ok := body["csum_fast"].(bool); ok {
-				// legacy: csum_fast true → safe off
-				c.CsumSafe = !v
 			}
 			if v, ok := body["public_host"].(string); ok {
 				c.PublicHost = v
@@ -756,15 +739,11 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 			}
 		})
 		cfg = s.Cfg.Get()
-		csumMode := uint8(0)
-		if cfg.CsumSafe {
-			csumMode = 1
-		}
-		if err := s.XDP.ApplyRuntimeConfig(cfg.SNATPortMin, cfg.SNATPortMax, csumMode); err != nil {
+		if err := s.Fwd.ApplyRuntimeConfig(cfg.Iface); err != nil {
 			writeErr(w, 500, "应用运行时配置失败: "+err.Error())
 			return
 		}
-		writeJSON(w, map[string]any{"ok": true, "note": "监听地址/端口变更需重启服务生效；校验模式已即时生效"})
+		writeJSON(w, map[string]any{"ok": true, "note": "监听地址/端口/网卡变更需重启服务生效"})
 	default:
 		writeErr(w, 405, "method")
 	}
@@ -833,7 +812,7 @@ func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"ok": true, "note": "面板将在约 1 秒后重启"})
 	go func() {
 		time.Sleep(800 * time.Millisecond)
-		_ = exec.Command("systemctl", "restart", "xdp-forward-panel.service").Run()
+		_ = exec.Command("systemctl", "restart", "nftfp.service").Run()
 	}()
 }
 
@@ -845,7 +824,7 @@ func (s *Server) handleTLSRegen(w http.ResponseWriter, r *http.Request) {
 	cfg := s.Cfg.Get()
 	if strings.EqualFold(cfg.TLSMode, "letsencrypt") || strings.EqualFold(cfg.TLSMode, "le") ||
 		strings.EqualFold(cfg.TLSMode, "zerossl") || strings.EqualFold(cfg.TLSMode, "zero") {
-		writeErr(w, 400, "当前为公共 CA 证书，请用「安装证书」或服务器执行: xdp cert")
+		writeErr(w, 400, "当前为公共 CA 证书，请用「安装证书」或服务器执行: nftfp cert")
 		return
 	}
 	// only regenerate local self-signed files under data dir
@@ -890,9 +869,9 @@ func (s *Server) handleTLSIssue(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "ZeroSSL 需要填写邮箱")
 		return
 	}
-	script := "/usr/local/sbin/xdp-panel-issue-cert"
+	script := "/usr/local/sbin/nftfp-issue-cert"
 	if _, err := os.Stat(script); err != nil {
-		writeErr(w, 500, "证书脚本不存在，请在服务器运行: xdp cert")
+		writeErr(w, 500, "证书脚本不存在，请在服务器运行: nftfp cert")
 		return
 	}
 	args := []string{mode, domain, body.Email}
@@ -902,7 +881,7 @@ func (s *Server) handleTLSIssue(w http.ResponseWriter, r *http.Request) {
 		cmd := exec.Command(script, args...)
 		_ = cmd.Run()
 		time.Sleep(500 * time.Millisecond)
-		_ = exec.Command("systemctl", "restart", "xdp-forward-panel.service").Run()
+		_ = exec.Command("systemctl", "restart", "nftfp.service").Run()
 	}()
 }
 
@@ -936,17 +915,17 @@ func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	helper := "/usr/local/sbin/xdp-panel-do-update"
+	helper := "/usr/local/sbin/nftfp-do-update"
 	if _, err := os.Stat(helper); err != nil {
-		// fallback: still avoid cgroup kill via systemd-run + xdp
-		helper = "/usr/local/bin/xdp"
+		// fallback: still avoid cgroup kill via systemd-run + nftfp
+		helper = "/usr/local/bin/nftfp"
 	}
 
 	_ = s.Store.AddAudit("web", "admin", "panel.update", "ok", body.Tag)
 	// Start outside the panel cgroup — otherwise systemctl restart kills the updater.
-	_ = exec.Command("systemctl", "reset-failed", "xdp-panel-manual-update.service").Run()
-	args := []string{"--unit=xdp-panel-manual-update", "--collect", "--no-block", helper}
-	if helper == "/usr/local/sbin/xdp-panel-do-update" {
+	_ = exec.Command("systemctl", "reset-failed", "nftfp-manual-update.service").Run()
+	args := []string{"--unit=nftfp-manual-update", "--collect", "--no-block", helper}
+	if helper == "/usr/local/sbin/nftfp-do-update" {
 		if body.Tag != "" {
 			args = append(args, body.Tag)
 		}
@@ -962,12 +941,12 @@ func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// last-resort: nohup detached (also outside panel restart cgroup kill if already forked)
 		script := helper
-		if helper == "/usr/local/bin/xdp" {
+		if helper == "/usr/local/bin/nftfp" {
 			script = helper + " update " + shellQuote(body.Tag)
 		} else if body.Tag != "" {
 			script = helper + " " + shellQuote(body.Tag)
 		}
-		nohup := exec.Command("bash", "-c", "nohup "+script+" >>/var/lib/xdp-forward-panel/update.log 2>&1 &")
+		nohup := exec.Command("bash", "-c", "nohup "+script+" >>/var/lib/nftfp/update.log 2>&1 &")
 		_ = nohup.Start()
 		writeJSON(w, map[string]any{
 			"ok":      true,
@@ -998,7 +977,7 @@ func normalizeVer(v string) string {
 }
 
 func readInstalledVersion() string {
-	b, err := os.ReadFile("/opt/xdp-forward-panel/VERSION")
+	b, err := os.ReadFile("/opt/nftfp/VERSION")
 	if err != nil {
 		return ""
 	}
@@ -1007,12 +986,12 @@ func readInstalledVersion() string {
 
 func fetchLatestReleaseTag() (string, string) {
 	client := &http.Client{Timeout: 8 * time.Second}
-	req, err := http.NewRequest(http.MethodGet, "https://api.github.com/repos/gzjacktang/xdpforward/releases/latest", nil)
+	req, err := http.NewRequest(http.MethodGet, "https://api.github.com/repos/gzjacktang/nftforward/releases/latest", nil)
 	if err != nil {
 		return "", err.Error()
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "xdp-forward-panel")
+	req.Header.Set("User-Agent", "nft-forward-panel")
 	res, err := client.Do(req)
 	if err != nil {
 		return "", err.Error()
@@ -1076,42 +1055,43 @@ func (s *Server) handleUninstall(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		time.Sleep(800 * time.Millisecond)
 		script := `set -e
-systemctl stop xdp-forward-panel.service 2>/dev/null || true
-systemctl disable xdp-forward-panel.service 2>/dev/null || true
-systemctl stop xdp-panel-update.timer 2>/dev/null || true
-systemctl disable xdp-panel-update.timer 2>/dev/null || true
-rm -f /etc/systemd/system/xdp-forward-panel.service /etc/systemd/system/xdp-panel-update.service /etc/systemd/system/xdp-panel-update.timer
+systemctl stop nftfp.service 2>/dev/null || true
+systemctl disable nftfp.service 2>/dev/null || true
+nft delete table ip nftfp 2>/dev/null || true
+systemctl stop nftfp-update.timer 2>/dev/null || true
+systemctl disable nftfp-update.timer 2>/dev/null || true
+rm -f /etc/systemd/system/nftfp.service /etc/systemd/system/nftfp-update.service /etc/systemd/system/nftfp-update.timer
 systemctl daemon-reload
-rm -f /usr/local/bin/xdp-panel /usr/local/bin/xdp
-		rm -f /usr/local/sbin/xdp-panel-issue-cert /usr/local/sbin/xdp-panel-auto-update /usr/local/sbin/xdp-panel-do-update
-rm -rf /usr/lib/xdp-forward-panel /usr/share/xdp-forward-panel /opt/xdp-forward-panel
+rm -f /usr/local/bin/nft-panel /usr/local/bin/nftfp
+		rm -f /usr/local/sbin/nftfp-issue-cert /usr/local/sbin/nftfp-auto-update /usr/local/sbin/nftfp-do-update
+rm -rf /usr/lib/nftfp /usr/share/nftfp /opt/nftfp
 `
 		// Default wipe: clearing config/db/certs so reinstall shows setup again.
 		if body.WipeData {
-			script += "rm -rf /var/lib/xdp-forward-panel\n"
+			script += "rm -rf /var/lib/nftfp\n"
 		}
 		_ = exec.Command("bash", "-c", script).Run()
 	}()
 }
 
-func (s *Server) syncXDP() error {
+func (s *Server) syncFwd() error {
 	rules, err := s.Store.ListForwards()
 	if err != nil {
 		return err
 	}
-	xr := make([]xdp.Rule, 0, len(rules))
+	xr := make([]fwd.Rule, 0, len(rules))
 	for _, r := range rules {
-		xr = append(xr, xdp.Rule{
+		xr = append(xr, fwd.Rule{
 			ID: uint32(r.ID), LocalPort: uint16(r.LocalPort),
 			DestIP: r.DestIP, DestPort: uint16(r.DestPort),
 			Proto: r.Proto, Enabled: r.Enabled,
 		})
 	}
-	st := s.XDP.Status()
+	st := s.Fwd.Status()
 	if !st.Loaded {
 		return nil
 	}
-	return s.XDP.SyncRules(xr)
+	return s.Fwd.SyncRules(xr)
 }
 
 func normalizeBasePath(v string) string {

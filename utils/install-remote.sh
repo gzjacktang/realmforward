@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 一键安装：从 GitHub Releases 拉取预编译包（无需 Go / clang）
-#   bash <(curl -fsSL https://raw.githubusercontent.com/gzjacktang/xdpforward/main/utils/install-remote.sh)
+#   bash <(curl -fsSL https://raw.githubusercontent.com/gzjacktang/nftforward/main/utils/install-remote.sh)
 set -euo pipefail
 
 if [[ "$(id -u)" -ne 0 ]]; then
@@ -8,7 +8,7 @@ if [[ "$(id -u)" -ne 0 ]]; then
   exit 1
 fi
 
-REPO="${XFP_GITHUB_REPO:-gzjacktang/xdpforward}"
+REPO="${XFP_GITHUB_REPO:-gzjacktang/nftforward}"
 API="https://api.github.com/repos/${REPO}/releases/latest"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -30,12 +30,11 @@ esac
 echo "查询最新 Release…"
 JSON="$(curl -fsSL "$API")"
 TAG="$(printf '%s' "$JSON" | jq -r '.tag_name')"
-ASSET_URL="$(printf '%s' "$JSON" | jq -r --arg a "xdpforward-${TAG}-${ARCH_TAG}.tar.gz" \
+ASSET_URL="$(printf '%s' "$JSON" | jq -r --arg a "nftforward-${TAG}-${ARCH_TAG}.tar.gz" \
   '.assets[] | select(.name==$a) | .browser_download_url')"
 
 if [[ -z "$ASSET_URL" || "$ASSET_URL" == "null" ]]; then
-  # 兼容未带 v 前缀的命名
-  ASSET_URL="$(printf '%s' "$JSON" | jq -r --arg a "xdpforward-${ARCH_TAG}.tar.gz" \
+  ASSET_URL="$(printf '%s' "$JSON" | jq -r --arg a "nftforward-v${TAG#v}-${ARCH_TAG}.tar.gz" \
     '.assets[] | select(.name==$a) | .browser_download_url')"
 fi
 
@@ -50,12 +49,10 @@ echo "下载 $ASSET_URL …"
 curl -fL --progress-bar "$ASSET_URL" -o "$TMP/pkg.tgz"
 mkdir -p "$TMP/pkg"
 tar -xzf "$TMP/pkg.tgz" -C "$TMP/pkg"
-# 包内可能多一层目录
 ROOT="$TMP/pkg"
-if [[ ! -x "$ROOT/bin/xdp-panel" ]]; then
-  ROOT="$(find "$TMP/pkg" -maxdepth 2 -type d -name 'xdpforward-*' | head -1)"
+if [[ ! -x "$ROOT/bin/nft-panel" ]]; then
+  ROOT="$(find "$TMP/pkg" -maxdepth 2 -type d -name 'nftforward-*' | head -1)"
 fi
-[[ -x "$ROOT/bin/xdp-panel" ]] || { echo "解压后找不到 bin/xdp-panel" >&2; exit 1; }
+[[ -x "$ROOT/bin/nft-panel" ]] || { echo "解压后找不到 bin/nft-panel" >&2; exit 1; }
 
-# 全新一键安装：允许交互清空旧数据并进入证书配置；更新请用 xdp update
 XFP_KEEP_DATA="${XFP_KEEP_DATA:-0}" bash "$ROOT/utils/install-release.sh"

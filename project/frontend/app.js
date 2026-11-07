@@ -186,15 +186,15 @@ async function renderDash(el) {
   const list = Array.isArray(fwds) ? fwds : [];
   const enabled = list.filter((r) => r.enabled).length;
   el.innerHTML = `
-    <div class="page-head"><div><h2>仪表盘</h2><p class="sub">主机状态、XDP 模式与流量概览</p></div>
+    <div class="page-head"><div><h2>仪表盘</h2><p class="sub">主机状态、nftables 模式与流量概览</p></div>
       <button class="btn btn-ghost btn-sm" onclick="goPage('dash')">刷新</button></div>
     <div class="banner warn"><strong>⚠</strong><div>${st.warning || ""}</div></div>
     <div class="grid grid-4" style="margin-bottom:16px">
-      <div class="stat"><div class="label">XDP 模式</div><div class="value" style="color:var(--accent)">${st.xdp?.mode || (st.xdp?.loaded ? "on" : "off")}</div>
-        <div class="meta">${st.xdp?.iface || "-"} · ${st.xdp?.loaded ? "已加载" : (st.xdp?.error || "未加载")}</div></div>
+      <div class="stat"><div class="label">转发引擎</div><div class="value" style="color:var(--accent)">${st.fwd?.mode || (st.fwd?.loaded ? "on" : "off")}</div>
+        <div class="meta">${st.fwd?.iface || "-"} · ${st.fwd?.loaded ? "已加载" : (st.fwd?.error || "未加载")}</div></div>
       <div class="stat"><div class="label">转发规则</div><div class="value">${list.length}</div><div class="meta">${enabled} 启用</div></div>
       <div class="stat"><div class="label">防火墙</div><div class="value" style="font-size:1.1rem">${st.firewall}</div><div class="meta">监听 ${st.listen}</div></div>
-      <div class="stat"><div class="label">SNAT 保留</div><div class="value" style="font-size:1.1rem">${st.snat}</div><div class="meta">不打开防火墙</div></div>
+      <div class="stat"><div class="label">引擎</div><div class="value" style="font-size:1.1rem">nftables</div><div class="meta">DNAT + masquerade</div></div>
     </div>
     <div class="panel"><div class="panel-h"><h3>转发规则</h3></div>
       <table><thead><tr><th>规则</th><th>协议</th><th>包</th><th>字节</th></tr></thead>
@@ -215,9 +215,9 @@ async function renderFwd(el) {
   const raw = await api("/forwards");
   const rules = Array.isArray(raw) ? raw : [];
   el.innerHTML = `
-    <div class="page-head"><div><h2>转发规则</h2><p class="sub">XDP DNAT+SNAT · IPv4 · 支持 tcp / udp / tcp+udp</p></div>
+    <div class="page-head"><div><h2>转发规则</h2><p class="sub">nftables DNAT+masquerade · IPv4 · 支持 tcp / udp / tcp+udp</p></div>
       <button class="btn btn-primary" id="btn-add-fwd">＋ 添加规则</button></div>
-    <div class="banner info"><strong>ℹ</strong><div>添加/修改后自动放行对应防火墙端口。XDP 在 netfilter 前执行。</div></div>
+    <div class="banner info"><strong>ℹ</strong><div>添加/修改后自动放行对应防火墙端口。流量经 nftables NAT 转发。</div></div>
     <div class="panel"><table>
       <thead><tr><th>ID</th><th>本地</th><th>目标</th><th>协议</th><th>状态</th><th>统计</th><th></th></tr></thead>
       <tbody>${rules.map((r) => `<tr>
@@ -336,18 +336,18 @@ async function renderPorts(el, page) {
         <button class="btn btn-ghost" id="btn-harden-fw">一键开启防火墙</button>
         <button class="btn btn-primary" id="btn-open-port">打开端口</button>
       </div></div>
-    <div class="banner warn"><strong>⚠</strong><div>「一键开启防火墙」会启用默认拒绝入站，仅保留 SSH（${data.ssh_port}）、面板、本机监听与 XDP 转发端口；其余已放行端口会关闭。关闭受保护端口需二次确认。</div></div>
+    <div class="banner warn"><strong>⚠</strong><div>「一键开启防火墙」会启用默认拒绝入站，仅保留 SSH（${data.ssh_port}）、面板、本机监听与 NFT 转发端口；其余已放行端口会关闭。关闭受保护端口需二次确认。</div></div>
     <div class="panel"><table>
-      <thead><tr><th>端口</th><th>协议</th><th>防火墙</th><th>监听</th><th>XDP</th><th></th></tr></thead>
+      <thead><tr><th>端口</th><th>协议</th><th>防火墙</th><th>监听</th><th>NFT</th><th></th></tr></thead>
       <tbody>${slice.map((p) => `<tr>
         <td class="mono">${p.port}${p.protected ? ' <span class="tag tag-warn">保护</span>' : ""}</td>
         <td><span class="tag tag-info">${protoLabel(p.proto)}</span></td>
         <td><span class="tag ${p.firewall === "open" ? "tag-ok" : (p.firewall === "partial" ? "tag-warn" : "tag-off")}">${p.firewall}</span></td>
         <td>${p.listening}</td>
-        <td><span class="tag ${p.xdp !== "—" ? "tag-xdp" : "tag-off"}">${p.xdp}</span></td>
+        <td><span class="tag ${p.fwd !== "—" ? "tag-fwd" : "tag-off"}">${p.fwd}</span></td>
         <td style="white-space:nowrap">
           <button class="btn btn-ghost btn-sm" data-edit-port="${p.port}" data-proto="${p.proto}"
-            data-fw="${p.firewall}" data-prot="${p.protected ? 1 : 0}" data-xdp="${p.xdp || ""}">修改</button>
+            data-fw="${p.firewall}" data-prot="${p.protected ? 1 : 0}" data-fwd="${p.fwd || ""}">修改</button>
           ${(p.firewall === "open" || p.firewall === "partial")
           ? `<button class="btn btn-ghost btn-sm" data-close="${p.port}" data-proto="${p.proto}" data-prot="${p.protected ? 1 : 0}">关闭</button>`
           : `<button class="btn btn-ghost btn-sm" data-open="${p.port}" data-proto="${p.proto}">打开</button>`}
@@ -366,7 +366,7 @@ async function renderPorts(el, page) {
   document.getElementById("ports-next").onclick = () => renderPorts(el, cur + 1);
 
   document.getElementById("btn-harden-fw").onclick = async () => {
-    if (!confirm("将开启防火墙（默认拒绝入站），并关闭所有无业务监听 / 无 XDP 转发的已放行端口。\n\n会保留：SSH、面板、本机监听、已启用转发端口。\n确认继续？")) {
+    if (!confirm("将开启防火墙（默认拒绝入站），并关闭所有无业务监听 / 无 NFT 转发的已放行端口。\n\n会保留：SSH、面板、本机监听、已启用转发端口。\n确认继续？")) {
       return;
     }
     try {
@@ -439,8 +439,8 @@ async function renderPorts(el, page) {
         toast("未更改");
         return;
       }
-      if (b.dataset.xdp && b.dataset.xdp !== "—" && newPort !== oldPort) {
-        if (!confirm("该端口绑定了 XDP 转发 " + b.dataset.xdp + "。修改防火墙端口不会改转发规则，是否继续？")) return;
+      if (b.dataset.fwd && b.dataset.fwd !== "—" && newPort !== oldPort) {
+        if (!confirm("该端口绑定了 NFT 转发 " + b.dataset.fwd + "。修改防火墙端口不会改转发规则，是否继续？")) return;
       }
       try {
         if (wasOpen) {
@@ -503,35 +503,29 @@ async function renderLogs(el) {
 async function renderSettings(el) {
   const s = await api("/settings");
   el.innerHTML = `
-    <div class="page-head"><div><h2>面板设置</h2><p class="sub">更新 · 证书 · 账号 · 卸载 · VPS 命令 <span class="mono">xdp</span></p></div></div>
+    <div class="page-head"><div><h2>面板设置</h2><p class="sub">更新 · 证书 · 账号 · 卸载 · VPS 命令 <span class="mono">nftfp</span></p></div></div>
     <div class="grid grid-2">
       <div class="panel"><div class="panel-h"><h3>版本与更新</h3></div><div class="form-box">
         <div class="ver-row"><div><div class="name">当前面板</div><div class="ver">v${esc(s.panel_version || s.installed_version || "?")}</div></div></div>
         <div class="ver-row"><div><div class="name">GitHub 最新</div><div class="ver" id="latest-ver">${s.latest_version ? esc(s.latest_version) : (s.latest_error ? "查询失败" : "…")}${s.update_available ? ' <span class="badge-new">可更新</span>' : ""}</div></div></div>
-        <div class="ver-row"><div><div class="name">转发内核 BPF</div><div class="ver">v${esc(s.bpf_version)} · ${s.xdp?.loaded ? esc(s.xdp.mode) : "未加载"}</div></div></div>
+        <div class="ver-row"><div><div class="name">转发引擎</div><div class="ver">v${esc(s.engine_version)} · ${s.fwd?.loaded ? esc(s.fwd.mode) : "未加载"}</div></div></div>
         <div id="upd-status" class="upd-status">${renderUpdateStatusHTML(s.update_status)}</div>
         <pre id="upd-log" class="upd-log mono" hidden></pre>
         <div class="field"><label>自动更新</label>
           <button type="button" class="toggle ${s.auto_update ? "on" : ""}" id="au"></button></div>
-        <div class="field"><label>兼容校验</label>
-          <button type="button" class="toggle ${s.csum_safe ? "on" : ""}" id="csum-safe"></button>
-          <p class="hint" style="margin:6px 0 0">默认开启：TCP 整包重算（更稳）。关闭后对 check≠0 的包走增量校验（更快）；若断流请重新打开。</p></div>
-        <div class="field"><label>更新地址</label><input id="upd" class="mono" value="${esc(s.update_url || "https://github.com/gzjacktang/xdpforward/releases/latest")}" /></div>
+        <div class="field"><label>更新地址</label><input id="upd" class="mono" value="${esc(s.update_url || "https://github.com/gzjacktang/nftforward/releases/latest")}" /></div>
         <div style="display:flex;flex-wrap:wrap;gap:8px">
           <button class="btn btn-primary" id="do-update">${s.update_available ? "立即更新到最新" : "检查并更新"}</button>
           <button class="btn btn-ghost" id="refresh-upd">刷新状态</button>
           <button class="btn btn-warn" id="restart">重启面板</button>
         </div>
-        <p class="hint">更新在独立任务中执行，不会被面板重启中断。也可在 VPS 执行 <span class="mono">xdp update</span></p>
+        <p class="hint">更新在独立任务中执行，不会被面板重启中断。也可在 VPS 执行 <span class="mono">nftfp update</span></p>
       </div></div>
       <div class="panel"><div class="panel-h"><h3>访问</h3></div><div class="form-box">
         <div class="field"><label>端口</label><input id="lp" class="mono" value="${s.listen_port}" /></div>
         <div class="field"><label>路径前缀</label><input id="bp" class="mono" value="${s.base_path || "/"}" /></div>
         <div class="field"><label>绑定</label><input id="la" class="mono" value="${s.listen_addr}" /></div>
         <div class="field"><label>网卡</label><input id="ifc" class="mono" value="${s.iface || ""}" /></div>
-        <div class="field"><label>SNAT 段</label><div class="form-row">
-          <input id="smin" class="mono" value="${s.snat_min}" /><input id="smax" class="mono" value="${s.snat_max}" /></div>
-          <p class="hint">仅保留内核端口，不打开防火墙。</p></div>
         <div class="field"><label>公网域名</label><input id="ph" class="mono" value="${s.public_host || ""}" /></div>
         <button class="btn btn-primary" id="sv">保存设置</button>
         <p class="hint">改端口/绑定后请「保存」再「重启面板」。</p>
@@ -553,7 +547,7 @@ async function renderSettings(el) {
         <button class="btn btn-primary" id="tls-issue">安装 / 更换证书</button>
         <button class="btn btn-ghost" id="regen">仅重生成自签</button>
       </div>
-      <p class="hint">Let's Encrypt 需要域名解析到本机且 <span class="mono">80</span> 可用。VPS: <span class="mono">xdp cert</span></p>
+      <p class="hint">Let's Encrypt 需要域名解析到本机且 <span class="mono">80</span> 可用。VPS: <span class="mono">nftfp cert</span></p>
     </div></div>
     <div class="panel" style="margin-top:14px"><div class="panel-h"><h3>账号</h3></div><div class="form-box">
       <div class="form-row">
@@ -562,7 +556,7 @@ async function renderSettings(el) {
         <div class="field"><label>新密码（至少 8 位，留空不改）</label><input id="np" type="password" autocomplete="new-password" /></div>
       </div>
       <button class="btn btn-primary" id="acc">保存账号</button>
-      <p class="hint" id="acc-hint">可只改用户名；改密码需当前密码 + 新密码。VPS: <span class="mono">xdp passwd</span></p>
+      <p class="hint" id="acc-hint">可只改用户名；改密码需当前密码 + 新密码。VPS: <span class="mono">nftfp passwd</span></p>
     </div></div>
     <div class="panel" style="margin-top:14px"><div class="panel-h"><h3>危险操作</h3></div><div class="form-box">
       <p class="hint">卸载将停止服务并删除程序；默认同时删除配置/数据库/证书，否则下次安装会沿用旧配置并跳过证书向导。</p>
@@ -572,7 +566,6 @@ async function renderSettings(el) {
       <button class="btn btn-warn" id="do-uninstall">卸载面板</button>
     </div></div>`;
   document.getElementById("au").onclick = function () { this.classList.toggle("on"); };
-  document.getElementById("csum-safe").onclick = function () { this.classList.toggle("on"); };
   document.getElementById("uninst-wipe").onclick = function () { this.classList.toggle("on"); };
   document.getElementById("sv").onclick = async () => {
     try {
@@ -585,15 +578,12 @@ async function renderSettings(el) {
           listen_addr: document.getElementById("la").value,
           iface: document.getElementById("ifc").value,
           public_host: document.getElementById("ph").value,
-          snat_min: +document.getElementById("smin").value,
-          snat_max: +document.getElementById("smax").value,
           update_url: document.getElementById("upd").value,
           auto_update: document.getElementById("au").classList.contains("on"),
-          csum_safe: document.getElementById("csum-safe").classList.contains("on"),
         }),
       });
       try { localStorage.setItem("xfp_next_url", panelURL(newBase)); } catch (_) {}
-      toast("设置已保存。改端口/路径后请点「重启面板」；校验模式已即时生效");
+      toast("设置已保存。改端口/路径/网卡后请点「重启面板」");
     } catch (ex) {
       toast("保存失败: " + ex.message);
     }

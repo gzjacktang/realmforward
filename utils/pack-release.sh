@@ -8,48 +8,31 @@ VER="${1:-$(tr -d '[:space:]' <"$ROOT/VERSION")}"
 VER="${VER#v}"
 GOARCH="${2:-amd64}"
 GOOS=linux
-OUT_NAME="xdpforward-v${VER}-linux-${GOARCH}"
+OUT_NAME="nftforward-v${VER}-linux-${GOARCH}"
 OUT_DIR="$ROOT/dist/$OUT_NAME"
 BACKEND="$ROOT/project/backend"
 
-case "$GOARCH" in
-  amd64) BPF_ARCH=x86 ;;
-  arm64) BPF_ARCH=arm64 ;;
-  *)
-    echo "不支持的 GOARCH: $GOARCH" >&2
-    exit 1
-    ;;
-esac
-
 rm -rf "$OUT_DIR"
-mkdir -p "$OUT_DIR"/{bin,lib,web,utils} "$ROOT/dist"
+mkdir -p "$OUT_DIR"/{bin,web,utils} "$ROOT/dist"
 
-echo "版本 $VER · ${GOOS}/${GOARCH} · BPF ARCH=$BPF_ARCH"
+echo "版本 $VER · ${GOOS}/${GOARCH}"
 echo "$VER" >"$OUT_DIR/VERSION"
 
 echo "编译面板…"
 (
   cd "$BACKEND"
   CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" go build \
-    -ldflags "-s -w -X github.com/wuling/xdp-forward-panel/internal/version.Version=${VER} -X github.com/wuling/xdp-forward-panel/internal/version.BPFVersion=${VER}" \
-    -o "$OUT_DIR/bin/xdp-panel" ./cmd/panel
+    -ldflags "-s -w -X github.com/gzjacktang/nftforward/internal/version.Version=${VER} -X github.com/gzjacktang/nftforward/internal/version.EngineVersion=${VER}" \
+    -o "$OUT_DIR/bin/nft-panel" ./cmd/panel
 )
 
-echo "编译 BPF…"
-if ! command -v clang >/dev/null 2>&1; then
-  echo "需要 clang 编译 BPF" >&2
-  exit 1
-fi
-make -C "$BACKEND" clean bpf ARCH="$BPF_ARCH"
-install -m 0644 "$BACKEND/bpf/xdp_forward.o" "$OUT_DIR/lib/xdp_forward.o"
-
-install -m 0755 "$ROOT/utils/xdp" "$OUT_DIR/bin/xdp"
+install -m 0755 "$ROOT/utils/nftfp" "$OUT_DIR/bin/nftfp"
 install -m 0644 "$ROOT/project/frontend/"* "$OUT_DIR/web/"
 install -m 0755 "$ROOT/utils/install-release.sh" "$OUT_DIR/utils/install-release.sh"
 install -m 0755 "$ROOT/utils/issue-cert.sh" "$OUT_DIR/utils/issue-cert.sh"
 install -m 0755 "$ROOT/utils/auto-update.sh" "$OUT_DIR/utils/auto-update.sh"
 install -m 0755 "$ROOT/utils/do-update.sh" "$OUT_DIR/utils/do-update.sh"
-install -m 0644 "$ROOT/utils/xdp-forward-panel.service" "$OUT_DIR/utils/xdp-forward-panel.service"
+install -m 0644 "$ROOT/utils/nftfp.service" "$OUT_DIR/utils/nftfp.service"
 
 (
   cd "$ROOT/dist"

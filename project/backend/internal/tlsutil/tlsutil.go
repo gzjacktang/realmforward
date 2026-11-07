@@ -39,7 +39,7 @@ func Generate(certFile, keyFile string, hosts []string) error {
 	}
 	tmpl := &x509.Certificate{
 		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: "xdp-forward-panel", Organization: []string{"XDP Forward Panel"}},
+		Subject:      pkix.Name{CommonName: "nftfp", Organization: []string{"NFT Forward Panel"}},
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().Add(365 * 24 * time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,

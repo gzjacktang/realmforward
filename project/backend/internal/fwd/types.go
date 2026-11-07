@@ -1,4 +1,4 @@
-package xdp
+package fwd
 
 import "fmt"
 
@@ -18,35 +18,20 @@ type Stats struct {
 
 type Status struct {
 	Loaded    bool   `json:"loaded"`
-	Mode      string `json:"mode"` // native|generic|""
+	Mode      string `json:"mode"` // nftables
 	Iface     string `json:"iface"`
 	Error     string `json:"error,omitempty"`
-	SNATMin   uint16 `json:"snat_min"`
-	SNATMax   uint16 `json:"snat_max"`
-	CsumMode  uint8  `json:"csum_mode"` // 0=fast incremental, 1=safe full TCP
 	RuleCount int    `json:"rule_count"`
 }
 
-func ProtoNumber(p string) (uint8, error) {
+func ExpandProtoNames(p string) ([]string, error) {
 	switch p {
 	case "tcp", "TCP":
-		return 6, nil
+		return []string{"tcp"}, nil
 	case "udp", "UDP":
-		return 17, nil
-	default:
-		return 0, fmt.Errorf("unsupported proto %q", p)
-	}
-}
-
-// ExpandProtos returns BPF protocol numbers for tcp/udp/both.
-func ExpandProtos(p string) ([]uint8, error) {
-	switch p {
-	case "tcp", "TCP":
-		return []uint8{6}, nil
-	case "udp", "UDP":
-		return []uint8{17}, nil
+		return []string{"udp"}, nil
 	case "both", "tcp+udp", "TCP+UDP":
-		return []uint8{6, 17}, nil
+		return []string{"tcp", "udp"}, nil
 	default:
 		return nil, fmt.Errorf("unsupported proto %q (use tcp/udp/both)", p)
 	}

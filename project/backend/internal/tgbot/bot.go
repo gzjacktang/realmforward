@@ -11,17 +11,17 @@ import (
 	"sync"
 	"time"
 
-	"github.com/wuling/xdp-forward-panel/internal/config"
-	"github.com/wuling/xdp-forward-panel/internal/firewall"
-	"github.com/wuling/xdp-forward-panel/internal/store"
-	"github.com/wuling/xdp-forward-panel/internal/xdp"
+	"github.com/gzjacktang/nftforward/internal/config"
+	"github.com/gzjacktang/nftforward/internal/firewall"
+	"github.com/gzjacktang/nftforward/internal/store"
+	"github.com/gzjacktang/nftforward/internal/fwd"
 )
 
 type Bot struct {
 	cfg   *config.Manager
 	store *store.Store
 	fw    *firewall.Manager
-	xdp   *xdp.Manager
+	fwd   *fwd.Manager
 	syncX func() error
 
 	mu     sync.Mutex
@@ -29,8 +29,8 @@ type Bot struct {
 	offset int64
 }
 
-func New(cfg *config.Manager, st *store.Store, fw *firewall.Manager, xm *xdp.Manager, syncX func() error) *Bot {
-	return &Bot{cfg: cfg, store: st, fw: fw, xdp: xm, syncX: syncX, stopCh: make(chan struct{})}
+func New(cfg *config.Manager, st *store.Store, fw *firewall.Manager, xm *fwd.Manager, syncX func() error) *Bot {
+	return &Bot{cfg: cfg, store: st, fw: fw, fwd: xm, syncX: syncX, stopCh: make(chan struct{})}
 }
 
 func (b *Bot) Start() {
@@ -139,13 +139,13 @@ func (b *Bot) handleCommand(c config.Config, chatID, userID int64, text string) 
 	actor := fmt.Sprintf("uid:%d", userID)
 	switch {
 	case cmd == "/status":
-		xs := b.xdp.Status()
-		b.send(c, chatID, fmt.Sprintf("XDP loaded=%v mode=%s iface=%s\nFW=%s\nSNAT=%d-%d",
-			xs.Loaded, xs.Mode, xs.Iface, b.fw.Backend, c.SNATPortMin, c.SNATPortMax))
+		xs := b.fwd.Status()
+		b.send(c, chatID, fmt.Sprintf("nftables loaded=%v mode=%s iface=%s\nFW=%s",
+			xs.Loaded, xs.Mode, xs.Iface, b.fw.Backend))
 	case cmd == "/ports":
 		b.send(c, chatID, fmt.Sprintf("防火墙后端: %s\n用面板查看三层状态，或 /open /close", b.fw.Backend))
 	case cmd == "/stats":
-		st := b.xdp.GetStats()
+		st := b.fwd.GetStats()
 		var sb strings.Builder
 		sb.WriteString("规则统计:\n")
 		for id, s := range st {

@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/wuling/xdp-forward-panel/internal/store"
+	"github.com/gzjacktang/nftforward/internal/store"
 )
 
 func TestLoginRoundTrip(t *testing.T) {

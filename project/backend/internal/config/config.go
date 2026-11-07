@@ -4,9 +4,10 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
-	"github.com/wuling/xdp-forward-panel/internal/version"
+	"github.com/gzjacktang/nftforward/internal/version"
 )
 
 type Config struct {
@@ -15,48 +16,38 @@ type Config struct {
 	BasePath     string  `json:"base_path"`
 	DataDir      string  `json:"data_dir"`
 	Iface        string  `json:"iface"`
-	PublicHost  string `json:"public_host"` // domain or IP for TLS SAN / hints
-	TLSMode     string `json:"tls_mode"`    // selfsigned | letsencrypt | zerossl
-	ACMEEmail   string `json:"acme_email"`
-	SNATPortMin uint16 `json:"snat_port_min"`
-	SNATPortMax uint16 `json:"snat_port_max"`
-	TLSCertFile string `json:"tls_cert_file"`
-	TLSKeyFile  string `json:"tls_key_file"`
-	UpdateURL   string `json:"update_url"`
-	AutoUpdate  bool   `json:"auto_update"`
+	PublicHost   string  `json:"public_host"`
+	TLSMode      string  `json:"tls_mode"`
+	ACMEEmail    string  `json:"acme_email"`
+	TLSCertFile  string  `json:"tls_cert_file"`
+	TLSKeyFile   string  `json:"tls_key_file"`
+	UpdateURL    string  `json:"update_url"`
+	AutoUpdate   bool    `json:"auto_update"`
 	TGToken      string  `json:"tg_token"`
 	TGAdminIDs   []int64 `json:"tg_admin_ids"`
 	TGEnabled    bool    `json:"tg_enabled"`
-	XDPMode      string  `json:"xdp_mode"` // auto|native|generic
-	CsumSafe     bool    `json:"csum_safe"` // true → always full TCP recompute
-	CsumFast     bool    `json:"csum_fast,omitempty"` // legacy
 	PanelVersion string  `json:"-"`
-	BPFVersion   string  `json:"-"`
+	EngineVer    string  `json:"-"`
 }
 
 func Default(dataDir string) *Config {
 	return &Config{
-		ListenAddr:  "0.0.0.0",
-		ListenPort:  2888,
-		BasePath:    "/",
-		DataDir:     dataDir,
-		Iface:       "",
-		PublicHost:  "",
-		TLSMode:     "selfsigned",
-		ACMEEmail:   "",
-		SNATPortMin: 40000,
-		SNATPortMax: 49999,
-		TLSCertFile: filepath.Join(dataDir, "tls", "cert.pem"),
-		TLSKeyFile:  filepath.Join(dataDir, "tls", "key.pem"),
-		UpdateURL:   "https://github.com/gzjacktang/xdpforward/releases/latest",
-		AutoUpdate:  true,
-		TGAdminIDs:  nil,
-		TGEnabled:   false,
-		XDPMode:     "auto",
-		// Default safe until incremental is proven on the box; UI can turn off.
-		CsumSafe:     true,
+		ListenAddr:   "0.0.0.0",
+		ListenPort:   2888,
+		BasePath:     "/",
+		DataDir:      dataDir,
+		Iface:        "",
+		PublicHost:   "",
+		TLSMode:      "selfsigned",
+		ACMEEmail:    "",
+		TLSCertFile:  filepath.Join(dataDir, "tls", "cert.pem"),
+		TLSKeyFile:   filepath.Join(dataDir, "tls", "key.pem"),
+		UpdateURL:    "https://github.com/gzjacktang/nftforward/releases/latest",
+		AutoUpdate:   true,
+		TGAdminIDs:   nil,
+		TGEnabled:    false,
 		PanelVersion: version.Version,
-		BPFVersion:   version.BPFVersion,
+		EngineVer:    version.EngineVersion,
 	}
 }
 
@@ -84,17 +75,14 @@ func LoadOrCreate(path string, dataDir string) (*Manager, error) {
 	if m.cfg.DataDir == "" {
 		m.cfg.DataDir = dataDir
 	}
-	if m.cfg.SNATPortMin == 0 {
-		m.cfg.SNATPortMin = 40000
-	}
-	if m.cfg.SNATPortMax == 0 {
-		m.cfg.SNATPortMax = 49999
-	}
 	if m.cfg.ListenPort == 0 {
 		m.cfg.ListenPort = 2888
 	}
+	if m.cfg.UpdateURL == "" || strings.Contains(m.cfg.UpdateURL, "xdpforward") {
+		m.cfg.UpdateURL = "https://github.com/gzjacktang/nftforward/releases/latest"
+	}
 	m.cfg.PanelVersion = version.Version
-	m.cfg.BPFVersion = version.BPFVersion
+	m.cfg.EngineVer = version.EngineVersion
 	return m, nil
 }
 

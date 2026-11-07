@@ -1,9 +1,8 @@
-module github.com/wuling/xdp-forward-panel
+module github.com/gzjacktang/nftforward
 
 go 1.26.5
 
 require (
-	github.com/cilium/ebpf v0.22.0
 	golang.org/x/crypto v0.58.0
 	modernc.org/sqlite v1.61.1
 )

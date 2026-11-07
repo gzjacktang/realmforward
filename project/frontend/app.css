@@ -297,7 +297,7 @@
     .tag-warn { background: var(--warn-soft); color: var(--warn); }
     .tag-info { background: rgba(23,92,211,.1); color: var(--info); }
     .tag-danger { background: var(--danger-soft); color: var(--danger); }
-    .tag-xdp { background: var(--accent-soft); color: var(--accent-2); }
+    .tag-fwd { background: var(--accent-soft); color: var(--accent-2); }
     .hint { font-size: 0.78rem; color: var(--muted); margin-top: 6px; line-height: 1.4; }
     .ver-row {
       display: flex; align-items: center; justify-content: space-between; gap: 12px;

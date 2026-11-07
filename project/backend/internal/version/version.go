@@ -1,7 +1,7 @@
 package version
 
-// Version is the panel release version. CI/release builds override via -ldflags.
-var Version = "0.2.14"
+// Version is the panel release version (overridden by -ldflags at build).
+var Version = "0.3.0"
 
-// BPFVersion tracks the bundled XDP object ABI/version.
-var BPFVersion = "0.2.14"
+// EngineVersion tracks the forwarding engine (nftables) ABI/version.
+var EngineVersion = "0.3.0"

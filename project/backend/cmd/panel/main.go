@@ -13,26 +13,24 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
-	"time"
 
-	"github.com/wuling/xdp-forward-panel/internal/api"
-	"github.com/wuling/xdp-forward-panel/internal/auth"
-	"github.com/wuling/xdp-forward-panel/internal/config"
-	"github.com/wuling/xdp-forward-panel/internal/firewall"
-	"github.com/wuling/xdp-forward-panel/internal/store"
-	"github.com/wuling/xdp-forward-panel/internal/tgbot"
-	"github.com/wuling/xdp-forward-panel/internal/tlsutil"
-	"github.com/wuling/xdp-forward-panel/internal/version"
-	"github.com/wuling/xdp-forward-panel/internal/xdp"
+	"github.com/gzjacktang/nftforward/internal/api"
+	"github.com/gzjacktang/nftforward/internal/auth"
+	"github.com/gzjacktang/nftforward/internal/config"
+	"github.com/gzjacktang/nftforward/internal/firewall"
+	"github.com/gzjacktang/nftforward/internal/fwd"
+	"github.com/gzjacktang/nftforward/internal/store"
+	"github.com/gzjacktang/nftforward/internal/tgbot"
+	"github.com/gzjacktang/nftforward/internal/tlsutil"
+	"github.com/gzjacktang/nftforward/internal/version"
 )
 
 func main() {
 	showVersion := flag.Bool("version", false, "print version and exit")
-	dataDir := flag.String("data", "/var/lib/xdp-forward-panel", "data directory")
-	iface := flag.String("iface", "", "network interface for XDP (default: auto)")
-	bpfObj := flag.String("bpf", "", "path to xdp_forward.o")
+	dataDir := flag.String("data", "/var/lib/nftfp", "data directory")
+	iface := flag.String("iface", "", "network interface for nftables NAT (default: auto)")
 	webDir := flag.String("web", "", "static web directory")
-	noXDP := flag.Bool("no-xdp", false, "skip XDP load (API-only mode)")
+	noFwd := flag.Bool("no-fwd", false, "skip nftables load (API-only mode)")
 	flag.Parse()
 	if *showVersion {
 		fmt.Println(version.Version)
@@ -62,16 +60,14 @@ func main() {
 	}
 	if created {
 		fmt.Println("========================================")
-		fmt.Println("XDP Forward Panel — 初始账号")
+		fmt.Println("NFT Forward Panel — 初始账号")
 		fmt.Println("用户名: admin")
 		fmt.Printf("密码:   %s\n", plain)
 		fmt.Println("请立即登录后修改密码；此密码只显示一次。")
 		fmt.Println("========================================")
 	}
 
-	xm := xdp.New()
-	xm.SetObjectPath(*bpfObj)
-
+	fm := fwd.New()
 	fw := firewall.Detect()
 	log.Printf("firewall backend: %s", fw.Backend)
 
@@ -83,42 +79,29 @@ func main() {
 		useIface = detectDefaultIface()
 	}
 
-	if !*noXDP {
-		// BPF: 0=fast (default), 1=safe full recompute
-		csumMode := uint8(0)
-		if cfg.CsumSafe {
-			csumMode = 1
+	if !*noFwd {
+		if err := fm.Load(useIface); err != nil {
+			log.Printf("nftables load failed: %v", err)
+			log.Fatal("按设计：转发引擎加载失败不降级，进程退出。可用 -no-fwd 仅调试 API。")
 		}
-		if err := xm.Load(useIface, cfg.XDPMode, cfg.SNATPortMin, cfg.SNATPortMax, csumMode); err != nil {
-			log.Printf("XDP load failed: %v", err)
-			log.Fatal("按设计：XDP 加载失败不降级，进程退出。可用 -no-xdp 仅调试 API。")
-		}
-		log.Printf("XDP loaded on %s mode=%s", useIface, xm.Status().Mode)
+		log.Printf("nftables loaded on %s mode=%s", useIface, fm.Status().Mode)
 		_ = cfgMgr.Update(func(c *config.Config) { c.Iface = useIface })
-		// sync DB rules
 		rules, _ := st.ListForwards()
-		xr := make([]xdp.Rule, 0, len(rules))
+		xr := make([]fwd.Rule, 0, len(rules))
 		for _, r := range rules {
-			xr = append(xr, xdp.Rule{
+			xr = append(xr, fwd.Rule{
 				ID: uint32(r.ID), LocalPort: uint16(r.LocalPort),
 				DestIP: r.DestIP, DestPort: uint16(r.DestPort),
 				Proto: r.Proto, Enabled: r.Enabled,
 			})
 		}
-		if err := xm.SyncRules(xr); err != nil {
+		if err := fm.SyncRules(xr); err != nil {
 			log.Printf("sync rules: %v", err)
 		}
-		go func() {
-			t := time.NewTicker(30 * time.Second)
-			defer t.Stop()
-			for range t.C {
-				xm.RefreshGateway()
-			}
-		}()
 	} else {
-		log.Printf("running with -no-xdp")
+		log.Printf("running with -no-fwd")
 	}
-	defer xm.Close()
+	defer fm.Close()
 
 	tlsHosts := []string{"127.0.0.1"}
 	if cfg.PublicHost != "" {
@@ -127,7 +110,7 @@ func main() {
 	switch strings.ToLower(cfg.TLSMode) {
 	case "letsencrypt", "le", "zerossl", "zero":
 		if _, err := os.Stat(cfg.TLSCertFile); err != nil {
-			log.Fatalf("证书不存在: %s （请运行: xdp cert）", cfg.TLSCertFile)
+			log.Fatalf("证书不存在: %s （请运行: nftfp cert）", cfg.TLSCertFile)
 		}
 		if _, err := os.Stat(cfg.TLSKeyFile); err != nil {
 			log.Fatalf("私钥不存在: %s", cfg.TLSKeyFile)
@@ -151,27 +134,27 @@ func main() {
 
 	sshPort := detectSSHPort()
 	srv := &api.Server{
-		Cfg: cfgMgr, Store: st, Auth: authSvc, XDP: xm, FW: fw,
+		Cfg: cfgMgr, Store: st, Auth: authSvc, Fwd: fm, FW: fw,
 		Static: staticFS, SSHPort: sshPort,
 	}
 
-	bot := tgbot.New(cfgMgr, st, fw, xm, func() error {
+	bot := tgbot.New(cfgMgr, st, fw, fm, func() error {
 		rules, err := st.ListForwards()
 		if err != nil {
 			return err
 		}
-		xr := make([]xdp.Rule, 0, len(rules))
+		xr := make([]fwd.Rule, 0, len(rules))
 		for _, r := range rules {
-			xr = append(xr, xdp.Rule{
+			xr = append(xr, fwd.Rule{
 				ID: uint32(r.ID), LocalPort: uint16(r.LocalPort),
 				DestIP: r.DestIP, DestPort: uint16(r.DestPort),
 				Proto: r.Proto, Enabled: r.Enabled,
 			})
 		}
-		if !xm.Status().Loaded {
+		if !fm.Status().Loaded {
 			return nil
 		}
-		return xm.SyncRules(xr)
+		return fm.SyncRules(xr)
 	})
 	bot.Start()
 	defer bot.Stop()
